@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "start": "npm run build && node dist/bot.js",
     "register": "npm run build && node dist/register-commands.js",
     "dev": "nodemon --watch src --ext ts,json --exec \"npm run build && node dist/bot.js\"",
