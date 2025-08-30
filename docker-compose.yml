@@ -1,0 +1,19 @@
+services:
+  bot:
+    build: .
+    container_name: guild-tycoon-bot
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    command: ["node", "dist/bot.js"]
+
+  # Optional: one-off command registrar
+  register:
+    build: .
+    env_file:
+      - .env
+    command: ["node", "dist/register-commands.js"]
+    profiles: ["setup"]
+
