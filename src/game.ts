@@ -1,4 +1,5 @@
 // Core game math and metadata for Tier 1 (sticks)
+import { GAME_TIMING, TIER_3_RECIPES, TIER_4_RECIPES } from './config.js';
 
 export interface Axe {
   key: string;
@@ -56,6 +57,12 @@ export interface User {
     beamsPerSec: number;
     pipesPerSec?: number;
     boxesPerSec?: number;
+    woodPerSec?: number;
+    steelPerSec?: number;
+    wheelsPerSec?: number;
+    boilersPerSec?: number;
+    cabinsPerSec?: number;
+    trainsPerSec?: number;
   };
   lastTick: number;
   lastChopAt: number; // timestamp ms for manual chop cooldown
@@ -83,7 +90,31 @@ export interface User {
   weldPassiveEnabled?: boolean;
   // Tier 3: individual production tracking
   pipesProduced?: number;
-  boxesProduced?: number;
+    boxesProduced?: number;
+  // Tier 4 state
+  role4?: 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic' | 'smithy' | 'lumberjack' | null;
+  automation4?: {
+    // Wheelwright automations
+    wh1?: number; wh2?: number; wh3?: number; wh4?: number; wh5?: number;
+    // Boilermaker automations
+    bl1?: number; bl2?: number; bl3?: number; bl4?: number; bl5?: number;
+    // Coachbuilder automations
+    cb1?: number; cb2?: number; cb3?: number; cb4?: number; cb5?: number;
+    // Train Assembler automations
+    ta1?: number; ta2?: number; ta3?: number; ta4?: number; ta5?: number;
+    // Smithy automations
+    sm1?: number; sm2?: number; sm3?: number; sm4?: number; sm5?: number;
+    // Lumberjack automations
+    lj1?: number; lj2?: number; lj3?: number; lj4?: number; lj5?: number;
+  };
+  prestigeMvpAwards?: number;
+  contributedT4?: number;
+  wheelsProduced?: number;
+  boilersProduced?: number;
+  cabinsProduced?: number;
+  woodProduced?: number;
+  steelProduced?: number;
+  trainsProduced?: number;
 }
 
 export interface Guild {
@@ -92,13 +123,25 @@ export interface Guild {
     beams: number;
     pipes?: number;
     boxes?: number;
+    wood?: number;
+    steel?: number;
+    wheels?: number;
+    boilers?: number;
+    cabins?: number;
+    trains?: number;
   };
-  // Shared Tier 3 inventory
+  // Shared Tier 3+ inventory
   inventory?: {
     sticks?: number;
     beams?: number;
     pipes: number;
     boxes: number;
+    wood?: number;
+    steel?: number;
+    wheels?: number;
+    boilers?: number;
+    cabins?: number;
+    trains?: number;
   };
   tierProgress: number;
   tierGoal: number;
@@ -110,6 +153,35 @@ export interface Guild {
   // Tier 3 shared click upgrades per role
   t3ForgerClickLevel?: number;
   t3WelderClickLevel?: number;
+  // Tier 4 shared click upgrades per role
+  t4LumberjackClickLevel?: number;
+  t4SmithyClickLevel?: number;
+  t4WheelwrightClickLevel?: number;
+  t4BoilermakerClickLevel?: number;
+  t4CoachbuilderClickLevel?: number;
+  t4MechanicClickLevel?: number;
+  // Prestige system
+  prestigePoints?: number;
+}
+
+// Typed role helpers
+export type Tier3Role = 'forger' | 'welder' | null;
+export type Tier4Role = 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic' | null;
+
+export function getRole3(user: User): Tier3Role {
+  return ((user as any).role3 || null) as Tier3Role;
+}
+export function getRole4(user: User): Tier4Role {
+  return ((user as any).role4 || null) as Tier4Role;
+}
+
+// Inventory accessor
+export function getGuildInventory(guild: Guild): {
+  sticks: number; beams: number; pipes: number; boxes: number; wood: number; steel: number; wheels: number; boilers: number; cabins: number; trains: number;
+} {
+  const inv = ((guild as any).inventory ||= { sticks: 0, beams: 0, pipes: 0, boxes: 0, wood: 0, steel: 0, wheels: 0, boilers: 0, cabins: 0, trains: 0 });
+  inv.sticks ||= 0; inv.beams ||= 0; inv.pipes ||= 0; inv.boxes ||= 0; inv.wood ||= 0; inv.steel ||= 0; inv.wheels ||= 0; inv.boilers ||= 0; inv.cabins ||= 0; inv.trains ||= 0;
+  return inv as any;
 }
 
 export const AXES: Axe[] = [
@@ -224,11 +296,15 @@ export function pickByLevel(level: number): Pickaxe {
 }
 
 // Manual collection: 12x longer cooldown and 12x payout
-export const CHOP_COOLDOWN_MS = 3_600_000; // 3600s = 60m
-export const CHOP_REWARD_MULTIPLIER = 3600;
+export const CHOP_COOLDOWN_MS = GAME_TIMING.CHOP_COOLDOWN_MS;
+export const CHOP_REWARD_MULTIPLIER = GAME_TIMING.CHOP_REWARD_MULTIPLIER;
 
-export function automationCost(def: AutomationType, owned: number): number {
-  return Math.floor(def.baseCost * Math.pow(def.growth, owned));
+export function automationCost(def: AutomationType, owned: number, user?: User): number {
+  const baseCost = Math.floor(def.baseCost * Math.pow(def.growth, owned));
+  if (user?.prestigeMvpAwards) {
+    return Math.floor(baseCost * Math.pow(0.99, user.prestigeMvpAwards));
+  }
+  return baseCost;
 }
 
 export function canAfford(sticks: number, cost: number): boolean {
@@ -334,7 +410,7 @@ export function tryBuyAutomation(guild: Guild, user: User, kind: string, tier: n
     const def = AUTOMATION[kind];
     if (!def) return { ok: false, reason: 'Invalid automation kind' };
     const owned = user.automation[def.key as keyof Automation] || 0;
-    const cost = automationCost(def, owned);
+    const cost = automationCost(def, owned, user);
     (guild as any).inventory = (guild as any).inventory || { sticks: 0, beams: 0, pipes: 0, boxes: 0 };
     const inv = (guild as any).inventory.sticks || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough sticks (guild)' };
@@ -350,7 +426,7 @@ export function tryBuyAutomation(guild: Guild, user: User, kind: string, tier: n
     const def = AUTOMATION_T2[kind];
     if (!def) return { ok: false, reason: 'Invalid automation kind' };
     const owned = (user.automation2 as any)[def.key] || 0;
-    const cost = automationCost(def, owned);
+    const cost = automationCost(def, owned, user);
     (guild as any).inventory = (guild as any).inventory || { sticks: 0, beams: 0, pipes: 0, boxes: 0 };
     const inv = (guild as any).inventory.beams || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough beams (guild)' };
@@ -390,7 +466,7 @@ export function applyGuildProgress(guild: Guild, added: number, tier: number): {
 }
 
 // Advance to the next tier only when explicitly triggered by the user.
-// Supports advancing 1->2 and 2->3 when progress goal is met.
+// Supports advancing 1->2, 2->3, 3->4, and 4->prestige when progress goal is met.
 export function advanceTierIfReady(guild: Guild): { tierUp: boolean } {
   const currentTier = (guild as any).widgetTier || 1;
   if (currentTier === 1 && guild.tierProgress >= guild.tierGoal) {
@@ -404,16 +480,118 @@ export function advanceTierIfReady(guild: Guild): { tierUp: boolean } {
     // Tier 3 approximately twice as long as Tier 2
     guild.tierGoal = (guild.tierGoal || 10000000) * 2;
     return { tierUp: true };
+  } else if (currentTier === 3 && guild.tierProgress >= guild.tierGoal) {
+    (guild as any).widgetTier = 4;
+    guild.tierProgress = 0;
+    // Tier 4 goal: 100 million trains
+    guild.tierGoal = 100_000_000;
+    return { tierUp: true };
+  } else if (currentTier === 4 && guild.tierProgress >= guild.tierGoal) {
+    // Prestige: reset to tier 1 but add prestige point
+    (guild as any).widgetTier = 1;
+    guild.tierProgress = 0;
+    guild.tierGoal = 1_000_000; // Reset to original tier 1 goal
+    (guild as any).prestigePoints = ((guild as any).prestigePoints || 0) + 1;
+    return { tierUp: true };
   }
   return { tierUp: false };
 }
 
 // Tier 3 — Steel Pipes (forgers) and Steel Boxes (welders)
-export const T3_PIPE_PER_BOX = 6; // 6 pipes per 1 box
+export const T3_PIPE_PER_BOX = TIER_3_RECIPES.PIPES_PER_BOX; // from config
 
 // Tier 3 Shared Click Upgrades (per-role, guild-shared)
 export const T3_CLICK_FORGER = { baseCostPipes: 600, growth: 1.25 } as const;
 export const T3_CLICK_WELDER = { baseCostBoxes: 60, growth: 1.25 } as const;
+
+// Tier 3 Click Upgrade Names (level 0..5; 5 is Mythic)
+export const T3_FORGER_CLICK_NAMES = [
+  'Bare Tongs',
+  'Bronze Hammer',
+  'Iron Hammer',
+  'Steel Anvil',
+  'Arcane Forge',
+  'Mythic Forge'
+] as const;
+export const T3_WELDER_CLICK_NAMES = [
+  'Bare Torch',
+  'Arc Torch',
+  'Precision Jig',
+  'Robotic Arm',
+  'Flux Core Rig',
+  'Mythic Welder'
+] as const;
+
+export function t3ClickUpgradeName(role: 'forger' | 'welder', level: number): string {
+  const idx = Math.max(0, Math.min(5, level));
+  return role === 'forger' ? T3_FORGER_CLICK_NAMES[idx] : T3_WELDER_CLICK_NAMES[idx];
+}
+
+// Tier 4 Click Upgrade Names per role (0..5; 5 is Mythic)
+export const T4_LUMBERJACK_CLICK_NAMES = [
+  'Bare Hands',
+  'Forest Hatchet',
+  'Timber Axe',
+  'Motor Chainsaw',
+  'Logging Skidder',
+  'Worldroot Timberlord'
+] as const;
+export const T4_SMITHY_CLICK_NAMES = [
+  'Bare Tongs',
+  'Coal Forge',
+  'Anvil & Hammer',
+  'Power Hammer',
+  'Blast Furnace',
+  'Starforge Crucible'
+] as const;
+export const T4_WHEELWRIGHT_CLICK_NAMES = [
+  'Hand Spoke Shave',
+  'Wood Lathe',
+  'Rim Former',
+  'Alloy Press',
+  'Dynamic Balancer',
+  'Ouroboros Wheelworks'
+] as const;
+export const T4_BOILERMAKER_CLICK_NAMES = [
+  'Tin Snips',
+  'Sheet Roller',
+  'Shell Welder',
+  'Rivet Gun',
+  'Pressure Tester',
+  'Leviathan Boilerhouse'
+] as const;
+export const T4_COACHBUILDER_CLICK_NAMES = [
+  'Carpentry Chisel',
+  'Upholstery Kit',
+  'Panel Bender',
+  'Paint Booth',
+  'Finish Line',
+  'Sovereign Coachworks'
+] as const;
+export const T4_MECHANIC_CLICK_NAMES = [
+  'Socket Wrench',
+  'Engine Hoist',
+  'Hydraulic Table',
+  'Coupler Jig',
+  'Assembly Line',
+  'Celestial Locomotive'
+] as const;
+
+export function t4ClickUpgradeName(
+  role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic',
+  level: number
+): string {
+  const idx = Math.max(0, Math.min(5, level));
+  switch (role) {
+    case 'lumberjack': return T4_LUMBERJACK_CLICK_NAMES[idx];
+    case 'smithy': return T4_SMITHY_CLICK_NAMES[idx];
+    case 'wheelwright': return T4_WHEELWRIGHT_CLICK_NAMES[idx];
+    case 'boilermaker': return T4_BOILERMAKER_CLICK_NAMES[idx];
+    case 'coachbuilder': return T4_COACHBUILDER_CLICK_NAMES[idx];
+    case 'mechanic':
+    default: return T4_MECHANIC_CLICK_NAMES[idx];
+  }
+}
 
 export function t3ForgerClickBase(guild: Guild): number {
   const lvl = (guild as any).t3ForgerClickLevel || 0;
@@ -472,7 +650,7 @@ export function applyPassiveTicksT3(guild: Guild, user: User, now: number = Date
   const dt = Math.max(0, (now - (user.lastTick || now)) / 1000);
   let pipes = 0;
   let boxesPotential = 0;
-  const role = (user as any).role3 || null;
+  const role = getRole3(user);
   if (role === 'forger') {
     const rate = totalAutomationRateT3Forger(user);
     pipes = rate * dt;
@@ -493,7 +671,7 @@ export function clickTier3(guild: Guild, user: User, now: number = Date.now()): 
   if (remaining > 0) {
     return { ok: false, reason: 'Cooldown', remainingMs: remaining };
   }
-  const role = (user as any).role3 || null;
+  const role = getRole3(user);
   let pipes = 0;
   let boxesPotential = 0;
   if (role === 'forger') {
@@ -510,7 +688,7 @@ export function tryBuyAutomationT3(guild: Guild, user: User, kind: keyof typeof 
   if (!def) return { ok: false, reason: 'Invalid automation kind' };
   const prop = def.key;
   const owned = ((user.automation3 as any)?.[prop] || 0) as number;
-  const cost = automationCost(def, owned);
+  const cost = automationCost(def, owned, user);
   // Determine currency by role and kind
   const isForge = (kind as string).startsWith('forge');
   const isWeld = (kind as string).startsWith('weld');
@@ -538,13 +716,13 @@ export function tryBuyAutomationT3(guild: Guild, user: User, kind: keyof typeof 
 export function applyTier3GuildFlows(guild: Guild, user: User, delta: { pipes?: number; boxesPotential?: number }): { pipesMade: number; boxesMade: number } {
   let pipesMade = Math.max(0, delta.pipes || 0);
   let boxesPotential = Math.max(0, delta.boxesPotential || 0);
-  guild.inventory = guild.inventory || { pipes: 0, boxes: 0 };
+  const inv = getGuildInventory(guild) as any;
   guild.totals.pipes = guild.totals.pipes || 0;
   guild.totals.boxes = guild.totals.boxes || 0;
 
   // Apply forging first
   if (pipesMade > 0) {
-    guild.inventory.pipes += pipesMade;
+    inv.pipes += pipesMade;
     guild.totals.pipes += pipesMade;
     (user as any).lifetimeContributed = (user as any).lifetimeContributed + pipesMade;
     (user as any).contributedT3 = ((user as any).contributedT3 || 0) + pipesMade; // credit in pipe-equivalents
@@ -554,11 +732,11 @@ export function applyTier3GuildFlows(guild: Guild, user: User, delta: { pipes?: 
   // Apply welding limited by available pipes
   let boxesMade = 0;
   if (boxesPotential > 0) {
-    const maxBoxes = guild.inventory.pipes / T3_PIPE_PER_BOX;
+    const maxBoxes = inv.pipes / T3_PIPE_PER_BOX;
     boxesMade = Math.min(boxesPotential, maxBoxes);
     const consumed = boxesMade * T3_PIPE_PER_BOX;
-    guild.inventory.pipes -= consumed;
-    guild.inventory.boxes += boxesMade;
+    inv.pipes -= consumed;
+    inv.boxes += boxesMade;
     guild.totals.boxes += boxesMade;
     // credit welder in pipe-equivalents for parity with forgers
     (user as any).lifetimeContributed = (user as any).lifetimeContributed + consumed;
@@ -567,10 +745,39 @@ export function applyTier3GuildFlows(guild: Guild, user: User, delta: { pipes?: 
   }
   // Progress reflects current shared inventory of boxes at Tier 3
   if ((guild as any).widgetTier === 3) {
-    const invBoxes = guild.inventory.boxes || 0;
+    const invBoxes = inv.boxes || 0;
     guild.tierProgress = Math.min(guild.tierGoal, invBoxes);
   }
   return { pipesMade, boxesMade };
+}
+
+// Calculate MVP (highest average contribution % across all tiers) and award them
+// MVP calculation lives in state to avoid circular imports
+
+// Reset guild to tier 1 state for prestige
+export function resetGuildForPrestige(guild: Guild): void {
+  // Reset tier and progress
+  (guild as any).widgetTier = 1;
+  guild.tierProgress = 0;
+  guild.tierGoal = 1_000_000;
+  
+  // Reset all totals but keep prestige points
+  guild.totals = { sticks: 0, beams: 0, pipes: 0, boxes: 0, wood: 0, steel: 0, wheels: 0, boilers: 0, cabins: 0, trains: 0 };
+  
+  // Reset all inventory
+  (guild as any).inventory = { sticks: 0, beams: 0, pipes: 0, boxes: 0, wood: 0, steel: 0, wheels: 0, boilers: 0, cabins: 0, trains: 0 };
+  
+  // Reset all shared tool levels
+  (guild as any).axeLevel = 0;
+  (guild as any).pickaxeLevel = 0;
+  (guild as any).t3ForgerClickLevel = 0;
+  (guild as any).t3WelderClickLevel = 0;
+  (guild as any).t4LumberjackClickLevel = 0;
+  (guild as any).t4SmithyClickLevel = 0;
+  (guild as any).t4WheelwrightClickLevel = 0;
+  (guild as any).t4BoilermakerClickLevel = 0;
+  (guild as any).t4CoachbuilderClickLevel = 0;
+  (guild as any).t4MechanicClickLevel = 0;
 }
 
 // Buy Tier 3 shared click upgrade for a role. Spends shared inventory.
@@ -601,4 +808,377 @@ export function tryBuyT3ClickUpgrade(guild: Guild, role: 'forger' | 'welder'): {
     }
     return { ok: true, newLevel: lvl + 1, cost };
   }
+}
+
+// Tier 4 — Trains (wheels, boilers, cabins)
+// Base materials: wood (from lumberjacks) and steel (from smithy)
+export const T4_STEEL_PER_WHEEL = TIER_4_RECIPES.STEEL_PER_WHEEL;
+export const T4_WOOD_PER_WHEEL = TIER_4_RECIPES.WOOD_PER_WHEEL;
+export const T4_STEEL_PER_BOILER = TIER_4_RECIPES.STEEL_PER_BOILER;
+export const T4_WOOD_PER_CABIN = TIER_4_RECIPES.WOOD_PER_CABIN;
+export const T4_WHEELS_PER_TRAIN = TIER_4_RECIPES.WHEELS_PER_TRAIN;
+export const T4_BOILERS_PER_TRAIN = TIER_4_RECIPES.BOILERS_PER_TRAIN;
+export const T4_CABINS_PER_TRAIN = TIER_4_RECIPES.CABINS_PER_TRAIN;
+
+// Tier 4 Shared Click Upgrades (per-role)
+export const T4_CLICK_LUMBERJACK = { baseCostWood: 50, growth: 1.25 } as const;
+export const T4_CLICK_SMITHY = { baseCostSteel: 30, growth: 1.25 } as const;
+export const T4_CLICK_WHEELWRIGHT = { baseCostWheels: 40, growth: 1.25 } as const;
+export const T4_CLICK_BOILER = { baseCostBoilers: 20, growth: 1.25 } as const;
+export const T4_CLICK_COACH = { baseCostCabins: 10, growth: 1.25 } as const;
+export const T4_CLICK_MECHANIC = { baseCostTrains: 5, growth: 1.25 } as const;
+
+export function t4LumberjackClickBase(guild: Guild): number {
+  const lvl = (guild as any).t4LumberjackClickLevel || 0;
+  return 1 + lvl; // wood-per-click units
+}
+export function t4SmithyClickBase(guild: Guild): number {
+  const lvl = (guild as any).t4SmithyClickLevel || 0;
+  return 1 + lvl; // steel-per-click units
+}
+export function t4WheelwrightClickBase(guild: Guild): number {
+  const lvl = (guild as any).t4WheelwrightClickLevel || 0;
+  return 1 + lvl; // wheels-per-click units
+}
+export function t4BoilermakerClickBase(guild: Guild): number {
+  const lvl = (guild as any).t4BoilermakerClickLevel || 0;
+  return 1 + lvl; // boilers-per-click units
+}
+export function t4CoachbuilderClickBase(guild: Guild): number {
+  const lvl = (guild as any).t4CoachbuilderClickLevel || 0;
+  return 1 + lvl; // cabins-per-click units
+}
+export function t4MechanicClickBase(guild: Guild): number {
+  const lvl = (guild as any).t4MechanicClickLevel || 0;
+  return 1 + lvl; // trains-per-click units
+}
+export function t4ClickUpgradeCost(role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic', level: number): number {
+  if (role === 'lumberjack') return Math.floor(T4_CLICK_LUMBERJACK.baseCostWood * Math.pow(T4_CLICK_LUMBERJACK.growth, level));
+  if (role === 'smithy') return Math.floor(T4_CLICK_SMITHY.baseCostSteel * Math.pow(T4_CLICK_SMITHY.growth, level));
+  if (role === 'wheelwright') return Math.floor(T4_CLICK_WHEELWRIGHT.baseCostWheels * Math.pow(T4_CLICK_WHEELWRIGHT.growth, level));
+  if (role === 'boilermaker') return Math.floor(T4_CLICK_BOILER.baseCostBoilers * Math.pow(T4_CLICK_BOILER.growth, level));
+  if (role === 'coachbuilder') return Math.floor(T4_CLICK_COACH.baseCostCabins * Math.pow(T4_CLICK_COACH.growth, level));
+  return Math.floor(T4_CLICK_MECHANIC.baseCostTrains * Math.pow(T4_CLICK_MECHANIC.growth, level));
+}
+
+// Tier 4 Automation (5 per role)
+export const AUTOMATION_T4_WHEEL: Record<string, AutomationType> = {
+  wh1: { key: 'wh1', name: 'Spoke Shop', baseRate: 0.5, baseCost: 10, growth: 1.15 },
+  wh2: { key: 'wh2', name: 'Lathe Line', baseRate: 1.0, baseCost: 40, growth: 1.16 },
+  wh3: { key: 'wh3', name: 'Press Form', baseRate: 2.0, baseCost: 160, growth: 1.18 },
+  wh4: { key: 'wh4', name: 'Rim Forge', baseRate: 4.0, baseCost: 640, growth: 1.2 },
+  wh5: { key: 'wh5', name: 'Balancing Rig', baseRate: 8.0, baseCost: 2560, growth: 1.22 }
+};
+export const AUTOMATION_T4_BOILER: Record<string, AutomationType> = {
+  bl1: { key: 'bl1', name: 'Tube Rack', baseRate: 0.4, baseCost: 8, growth: 1.15 },
+  bl2: { key: 'bl2', name: 'Sheet Roller', baseRate: 0.8, baseCost: 32, growth: 1.16 },
+  bl3: { key: 'bl3', name: 'Shell Welder', baseRate: 1.6, baseCost: 128, growth: 1.18 },
+  bl4: { key: 'bl4', name: 'Rivet Station', baseRate: 3.2, baseCost: 512, growth: 1.2 },
+  bl5: { key: 'bl5', name: 'Pressure Tester', baseRate: 6.4, baseCost: 2048, growth: 1.22 }
+};
+export const AUTOMATION_T4_COACH: Record<string, AutomationType> = {
+  cb1: { key: 'cb1', name: 'Carpentry Bench', baseRate: 0.3, baseCost: 6, growth: 1.15 },
+  cb2: { key: 'cb2', name: 'Upholstery Line', baseRate: 0.6, baseCost: 24, growth: 1.16 },
+  cb3: { key: 'cb3', name: 'Panel Bender', baseRate: 1.2, baseCost: 96, growth: 1.18 },
+  cb4: { key: 'cb4', name: 'Paint Booth', baseRate: 2.4, baseCost: 384, growth: 1.2 },
+  cb5: { key: 'cb5', name: 'Finishing Line', baseRate: 4.8, baseCost: 1536, growth: 1.22 }
+};
+export const AUTOMATION_T4_LUMBERJACK: Record<string, AutomationType> = {
+  lj1: { key: 'lj1', name: 'Hand Axe', baseRate: 0.8, baseCost: 16, growth: 1.15 },
+  lj2: { key: 'lj2', name: 'Crosscut Saw', baseRate: 1.6, baseCost: 64, growth: 1.16 },
+  lj3: { key: 'lj3', name: 'Felling Wedge', baseRate: 3.2, baseCost: 256, growth: 1.18 },
+  lj4: { key: 'lj4', name: 'Logging Crane', baseRate: 6.4, baseCost: 1024, growth: 1.2 },
+  lj5: { key: 'lj5', name: 'Tree Processor', baseRate: 12.8, baseCost: 4096, growth: 1.22 }
+};
+export const AUTOMATION_T4_SMITHY: Record<string, AutomationType> = {
+  sm1: { key: 'sm1', name: 'Forge Bellows', baseRate: 0.6, baseCost: 12, growth: 1.15 },
+  sm2: { key: 'sm2', name: 'Anvil Station', baseRate: 1.2, baseCost: 48, growth: 1.16 },
+  sm3: { key: 'sm3', name: 'Quench Tank', baseRate: 2.4, baseCost: 192, growth: 1.18 },
+  sm4: { key: 'sm4', name: 'Power Hammer', baseRate: 4.8, baseCost: 768, growth: 1.2 },
+  sm5: { key: 'sm5', name: 'Blast Furnace', baseRate: 9.6, baseCost: 3072, growth: 1.22 }
+};
+export const AUTOMATION_T4_MECHANIC: Record<string, AutomationType> = {
+  ta1: { key: 'ta1', name: 'Assembly Jig', baseRate: 0.2, baseCost: 4, growth: 1.15 },
+  ta2: { key: 'ta2', name: 'Coupling Tools', baseRate: 0.4, baseCost: 16, growth: 1.16 },
+  ta3: { key: 'ta3', name: 'Hydraulic Lift', baseRate: 0.8, baseCost: 64, growth: 1.18 },
+  ta4: { key: 'ta4', name: 'Rolling Crane', baseRate: 1.6, baseCost: 256, growth: 1.2 },
+  ta5: { key: 'ta5', name: 'Assembly Line', baseRate: 3.2, baseCost: 1024, growth: 1.22 }
+};
+
+// Generic automation rate calculation
+function calculateAutomationRate(automation: Record<string, number>, definitions: Record<string, AutomationType>): number {
+  return Object.entries(definitions).reduce((total, [key, def]) => 
+    total + (automation[key] || 0) * def.baseRate, 0);
+}
+
+export function totalAutomationRateT4Wheel(u: User): number {
+  const a = (u as any).automation4 || {};
+  return calculateAutomationRate(a, AUTOMATION_T4_WHEEL);
+}
+
+export function totalAutomationRateT4Boiler(u: User): number {
+  const a = (u as any).automation4 || {};
+  return calculateAutomationRate(a, AUTOMATION_T4_BOILER);
+}
+
+export function totalAutomationRateT4Coach(u: User): number {
+  const a = (u as any).automation4 || {};
+  return calculateAutomationRate(a, AUTOMATION_T4_COACH);
+}
+
+export function totalAutomationRateT4Lumberjack(u: User): number {
+  const a = (u as any).automation4 || {};
+  return calculateAutomationRate(a, AUTOMATION_T4_LUMBERJACK);
+}
+
+export function totalAutomationRateT4Smithy(u: User): number {
+  const a = (u as any).automation4 || {};
+  return calculateAutomationRate(a, AUTOMATION_T4_SMITHY);
+}
+
+export function totalAutomationRateT4Mechanic(u: User): number {
+  const a = (u as any).automation4 || {};
+  return calculateAutomationRate(a, AUTOMATION_T4_MECHANIC);
+}
+
+export function applyPassiveTicksT4(guild: Guild, user: User, now: number = Date.now()): { woodPotential: number; steelPotential: number; wheelsPotential: number; boilersPotential: number; cabinsPotential: number; trainsPotential: number } {
+  const dt = Math.max(0, (now - (user.lastTick || now)) / 1000);
+  let woodPotential = 0, steelPotential = 0, wheelsPotential = 0, boilersPotential = 0, cabinsPotential = 0, trainsPotential = 0;
+  const role = getRole4(user);
+  
+  if (role === 'lumberjack') {
+    const rate = totalAutomationRateT4Lumberjack(user);
+    woodPotential = rate * dt;
+    (user as any).rates.woodPerSec = rate;
+  } else if (role === 'smithy') {
+    const rate = totalAutomationRateT4Smithy(user);
+    steelPotential = rate * dt;
+    (user as any).rates.steelPerSec = rate;
+  } else if (role === 'wheelwright') {
+    const rate = totalAutomationRateT4Wheel(user);
+    wheelsPotential = rate * dt;
+    (user as any).rates.wheelsPerSec = rate;
+  } else if (role === 'boilermaker') {
+    const rate = totalAutomationRateT4Boiler(user);
+    boilersPotential = rate * dt;
+    (user as any).rates.boilersPerSec = rate;
+  } else if (role === 'coachbuilder') {
+    const rate = totalAutomationRateT4Coach(user);
+    cabinsPotential = rate * dt;
+    (user as any).rates.cabinsPerSec = rate;
+  } else if (role === 'mechanic') {
+    const rate = totalAutomationRateT4Mechanic(user);
+    trainsPotential = rate * dt;
+    (user as any).rates.trainsPerSec = rate;
+  }
+  
+  user.lastTick = now;
+  return { woodPotential, steelPotential, wheelsPotential, boilersPotential, cabinsPotential, trainsPotential };
+}
+
+export function clickTier4(guild: Guild, user: User, now: number = Date.now()): { ok: true; wood: number; steel: number; wheels: number; boilers: number; cabins: number; trains: number } | { ok: false; reason: string; remainingMs: number } {
+  const last = user.lastChopAt || 0;
+  const remaining = Math.max(0, (last + CHOP_COOLDOWN_MS) - now);
+  if (remaining > 0) return { ok: false, reason: 'Cooldown', remainingMs: remaining };
+  const role = getRole4(user);
+  let wood = 0, steel = 0, wheels = 0, boilers = 0, cabins = 0, trains = 0;
+  if (role === 'lumberjack') wood = t4LumberjackClickBase(guild) * CHOP_REWARD_MULTIPLIER;
+  else if (role === 'smithy') steel = t4SmithyClickBase(guild) * CHOP_REWARD_MULTIPLIER;
+  else if (role === 'wheelwright') wheels = t4WheelwrightClickBase(guild) * CHOP_REWARD_MULTIPLIER;
+  else if (role === 'boilermaker') boilers = t4BoilermakerClickBase(guild) * CHOP_REWARD_MULTIPLIER;
+  else if (role === 'coachbuilder') cabins = t4CoachbuilderClickBase(guild) * CHOP_REWARD_MULTIPLIER;
+  else if (role === 'mechanic') trains = t4MechanicClickBase(guild) * CHOP_REWARD_MULTIPLIER;
+  user.lastChopAt = now;
+  return { ok: true, wood, steel, wheels, boilers, cabins, trains };
+}
+
+export function tryBuyAutomationT4(guild: Guild, user: User, kind: keyof typeof AUTOMATION_T4_LUMBERJACK | keyof typeof AUTOMATION_T4_SMITHY | keyof typeof AUTOMATION_T4_WHEEL | keyof typeof AUTOMATION_T4_BOILER | keyof typeof AUTOMATION_T4_COACH | keyof typeof AUTOMATION_T4_MECHANIC): { ok: boolean; reason?: string; def?: AutomationType; newOwned?: number; cost?: number } {
+  const def = ((AUTOMATION_T4_LUMBERJACK as any)[kind] || (AUTOMATION_T4_SMITHY as any)[kind] || (AUTOMATION_T4_WHEEL as any)[kind] || (AUTOMATION_T4_BOILER as any)[kind] || (AUTOMATION_T4_COACH as any)[kind] || (AUTOMATION_T4_MECHANIC as any)[kind]) as AutomationType | undefined;
+  if (!def) return { ok: false, reason: 'Invalid automation kind' };
+  const prop = def.key;
+  const owned = ((user.automation4 as any)?.[prop] || 0) as number;
+  const cost = automationCost(def, owned, user);
+  guild.inventory = guild.inventory || { pipes: 0, boxes: 0 } as any;
+  // Currency is the product type
+  let currency: 'wood' | 'steel' | 'wheels' | 'boilers' | 'cabins' | 'trains' | null = null;
+  if ((AUTOMATION_T4_LUMBERJACK as any)[kind]) currency = 'wood';
+  else if ((AUTOMATION_T4_SMITHY as any)[kind]) currency = 'steel';
+  else if ((AUTOMATION_T4_WHEEL as any)[kind]) currency = 'wheels';
+  else if ((AUTOMATION_T4_BOILER as any)[kind]) currency = 'boilers';
+  else if ((AUTOMATION_T4_COACH as any)[kind]) currency = 'cabins';
+  else if ((AUTOMATION_T4_MECHANIC as any)[kind]) currency = 'trains';
+  const inv = (guild.inventory as any)[currency!] || 0;
+  if (!canAfford(inv, cost)) return { ok: false, reason: `Not enough ${currency}` };
+  (guild.inventory as any)[currency!] = inv - cost;
+  user.automation4 = user.automation4 || {};
+  (user.automation4 as any)[prop] = owned + 1;
+  return { ok: true, def, newOwned: owned + 1, cost };
+}
+
+export function tryBuyT4ClickUpgrade(guild: Guild, role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'): { ok: boolean; reason?: string; newLevel?: number; cost?: number } {
+  (guild as any).inventory = (guild as any).inventory || {};
+  
+  if (role === 'lumberjack') {
+    const lvl = (guild as any).t4LumberjackClickLevel || 0;
+    const cost = t4ClickUpgradeCost('lumberjack', lvl);
+    const inv = (guild as any).inventory.wood || 0;
+    if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough wood' };
+    (guild as any).inventory.wood = inv - cost;
+    (guild as any).t4LumberjackClickLevel = lvl + 1;
+    return { ok: true, newLevel: lvl + 1, cost };
+  } else if (role === 'smithy') {
+    const lvl = (guild as any).t4SmithyClickLevel || 0;
+    const cost = t4ClickUpgradeCost('smithy', lvl);
+    const inv = (guild as any).inventory.steel || 0;
+    if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough steel' };
+    (guild as any).inventory.steel = inv - cost;
+    (guild as any).t4SmithyClickLevel = lvl + 1;
+    return { ok: true, newLevel: lvl + 1, cost };
+  } else if (role === 'wheelwright') {
+    const lvl = (guild as any).t4WheelwrightClickLevel || 0;
+    const cost = t4ClickUpgradeCost('wheelwright', lvl);
+    const inv = (guild as any).inventory.wheels || 0;
+    if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough wheels' };
+    (guild as any).inventory.wheels = inv - cost;
+    (guild as any).t4WheelwrightClickLevel = lvl + 1;
+    return { ok: true, newLevel: lvl + 1, cost };
+  } else if (role === 'boilermaker') {
+    const lvl = (guild as any).t4BoilermakerClickLevel || 0;
+    const cost = t4ClickUpgradeCost('boilermaker', lvl);
+    const inv = (guild as any).inventory.boilers || 0;
+    if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough boilers' };
+    (guild as any).inventory.boilers = inv - cost;
+    (guild as any).t4BoilermakerClickLevel = lvl + 1;
+    return { ok: true, newLevel: lvl + 1, cost };
+  } else if (role === 'coachbuilder') {
+    const lvl = (guild as any).t4CoachbuilderClickLevel || 0;
+    const cost = t4ClickUpgradeCost('coachbuilder', lvl);
+    const inv = (guild as any).inventory.cabins || 0;
+    if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough cabins' };
+    (guild as any).inventory.cabins = inv - cost;
+    (guild as any).t4CoachbuilderClickLevel = lvl + 1;
+    return { ok: true, newLevel: lvl + 1, cost };
+  } else { // mechanic
+    const lvl = (guild as any).t4MechanicClickLevel || 0;
+    const cost = t4ClickUpgradeCost('mechanic', lvl);
+    const inv = (guild as any).inventory.trains || 0;
+    if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough trains' };
+    (guild as any).inventory.trains = inv - cost;
+    (guild as any).t4MechanicClickLevel = lvl + 1;
+    return { ok: true, newLevel: lvl + 1, cost };
+  }
+}
+
+export function applyTier4GuildFlows(guild: Guild, user: User, delta: { woodPotential?: number; steelPotential?: number; wheelsPotential?: number; boilersPotential?: number; cabinsPotential?: number; trainsPotential?: number }): { woodMade: number; steelMade: number; wheelsMade: number; boilersMade: number; cabinsMade: number; trainsMade: number } {
+  const inv = getGuildInventory(guild) as any;
+  
+  // Initialize all tier 4 inventory and totals
+  inv.wood = inv.wood || 0;
+  inv.steel = inv.steel || 0;
+  inv.wheels = inv.wheels || 0;
+  inv.boilers = inv.boilers || 0;
+  inv.cabins = inv.cabins || 0;
+  inv.trains = inv.trains || 0;
+  guild.totals.wood = guild.totals.wood || 0;
+  guild.totals.steel = guild.totals.steel || 0;
+  guild.totals.wheels = guild.totals.wheels || 0;
+  guild.totals.boilers = guild.totals.boilers || 0;
+  guild.totals.cabins = guild.totals.cabins || 0;
+  guild.totals.trains = guild.totals.trains || 0;
+
+  let woodMade = 0, steelMade = 0, wheelsMade = 0, boilersMade = 0, cabinsMade = 0, trainsMade = 0;
+  
+  // 1. Lumberjacks produce wood (base material)
+  const woodProd = Math.max(0, delta.woodPotential || 0);
+  if (woodProd > 0) {
+    woodMade = woodProd;
+    inv.wood += woodMade;
+    guild.totals.wood! += woodMade;
+    (user as any).lifetimeContributed = (user as any).lifetimeContributed + woodMade;
+    (user as any).contributedT4 = ((user as any).contributedT4 || 0) + woodMade;
+    (user as any).woodProduced = ((user as any).woodProduced || 0) + woodMade;
+  }
+  
+  // 2. Smithy produces steel (base material)
+  const steelProd = Math.max(0, delta.steelPotential || 0);
+  if (steelProd > 0) {
+    steelMade = steelProd;
+    inv.steel += steelMade;
+    guild.totals.steel! += steelMade;
+    (user as any).lifetimeContributed = (user as any).lifetimeContributed + steelMade;
+    (user as any).contributedT4 = ((user as any).contributedT4 || 0) + steelMade;
+    (user as any).steelProduced = ((user as any).steelProduced || 0) + steelMade;
+  }
+  
+  // 3. Wheelwrights make wheels from steel + wood
+  const wheelsProd = Math.max(0, delta.wheelsPotential || 0);
+  if (wheelsProd > 0) {
+    const maxBySteel = Math.floor(inv.steel / T4_STEEL_PER_WHEEL);
+    const maxByWood = Math.floor(inv.wood / T4_WOOD_PER_WHEEL);
+    wheelsMade = Math.max(0, Math.min(wheelsProd, maxBySteel, maxByWood));
+    inv.steel -= wheelsMade * T4_STEEL_PER_WHEEL;
+    inv.wood -= wheelsMade * T4_WOOD_PER_WHEEL;
+    inv.wheels += wheelsMade;
+    guild.totals.wheels! += wheelsMade;
+    const contribution = wheelsMade * (T4_STEEL_PER_WHEEL + T4_WOOD_PER_WHEEL);
+    (user as any).lifetimeContributed = (user as any).lifetimeContributed + contribution;
+    (user as any).contributedT4 = ((user as any).contributedT4 || 0) + contribution;
+    (user as any).wheelsProduced = ((user as any).wheelsProduced || 0) + wheelsMade;
+  }
+  
+  // 4. Boilermakers make boilers from steel only
+  const boilersProd = Math.max(0, delta.boilersPotential || 0);
+  if (boilersProd > 0) {
+    const maxBySteel = Math.floor(inv.steel / T4_STEEL_PER_BOILER);
+    boilersMade = Math.max(0, Math.min(boilersProd, maxBySteel));
+    inv.steel -= boilersMade * T4_STEEL_PER_BOILER;
+    inv.boilers += boilersMade;
+    guild.totals.boilers! += boilersMade;
+    const contribution = boilersMade * T4_STEEL_PER_BOILER;
+    (user as any).lifetimeContributed = (user as any).lifetimeContributed + contribution;
+    (user as any).contributedT4 = ((user as any).contributedT4 || 0) + contribution;
+    (user as any).boilersProduced = ((user as any).boilersProduced || 0) + boilersMade;
+  }
+  
+  // 5. Coachbuilders make cabins from wood only
+  const cabinsProd = Math.max(0, delta.cabinsPotential || 0);
+  if (cabinsProd > 0) {
+    const maxByWood = Math.floor(inv.wood / T4_WOOD_PER_CABIN);
+    cabinsMade = Math.max(0, Math.min(cabinsProd, maxByWood));
+    inv.wood -= cabinsMade * T4_WOOD_PER_CABIN;
+    inv.cabins += cabinsMade;
+    guild.totals.cabins! += cabinsMade;
+    const contribution = cabinsMade * T4_WOOD_PER_CABIN;
+    (user as any).lifetimeContributed = (user as any).lifetimeContributed + contribution;
+    (user as any).contributedT4 = ((user as any).contributedT4 || 0) + contribution;
+    (user as any).cabinsProduced = ((user as any).cabinsProduced || 0) + cabinsMade;
+  }
+  
+  // 6. Train assemblers assemble trains from components
+  const trainsProd = Math.max(0, delta.trainsPotential || 0);
+  const maxTrainsByComponents = Math.min(
+    Math.floor(inv.wheels / T4_WHEELS_PER_TRAIN),
+    Math.floor(inv.boilers / T4_BOILERS_PER_TRAIN),
+    Math.floor(inv.cabins / T4_CABINS_PER_TRAIN)
+  );
+  trainsMade = Math.max(0, Math.min(trainsProd, maxTrainsByComponents));
+  if (trainsMade > 0) {
+    inv.wheels -= trainsMade * T4_WHEELS_PER_TRAIN;
+    inv.boilers -= trainsMade * T4_BOILERS_PER_TRAIN;
+    inv.cabins -= trainsMade * T4_CABINS_PER_TRAIN;
+    inv.trains += trainsMade;
+    guild.totals.trains! += trainsMade;
+    const contribution = trainsMade * (T4_WHEELS_PER_TRAIN + T4_BOILERS_PER_TRAIN + T4_CABINS_PER_TRAIN);
+    (user as any).lifetimeContributed = (user as any).lifetimeContributed + contribution;
+    (user as any).contributedT4 = ((user as any).contributedT4 || 0) + contribution;
+    (user as any).trainsProduced = ((user as any).trainsProduced || 0) + trainsMade;
+  }
+  
+  // Tier progress reflects current trains inventory at Tier 4
+  if (((guild as any).widgetTier || 1) === 4) {
+    const invTrains = inv.trains || 0;
+    (guild as any).tierProgress = Math.min(guild.tierGoal, invTrains);
+  }
+  
+  return { woodMade, steelMade, wheelsMade, boilersMade, cabinsMade, trainsMade };
 }
