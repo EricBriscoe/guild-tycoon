@@ -279,6 +279,14 @@ export const AUTOMATION_T2: Record<string, AutomationType> = {
   }
 };
 
+// Unified manual click power progression used by higher tiers (levels 0..5)
+// Matches Tier 1/2 tool clickPower sequence: 1, 3, 8, 20, 60, 200
+export const CLICK_POWER_BY_LEVEL: Readonly<number[]> = [1, 3, 8, 20, 60, 200] as const;
+export function clickPowerByLevel(level: number): number {
+  const idx = Math.max(0, Math.min(CLICK_POWER_BY_LEVEL.length - 1, level|0));
+  return CLICK_POWER_BY_LEVEL[idx];
+}
+
 export function getNextAxe(level: number): Axe | null {
   return AXES.find(a => a.level === level + 1) || null;
 }
@@ -596,12 +604,15 @@ export function t4ClickUpgradeName(
 
 export function t3ForgerClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t3ForgerClickLevel || 0, T3_CLICK_LEVEL_MAX);
-  return 1 + lvl; // base pipes-per-click units before multiplier
+  // Base pipes per click follows Tier 1/2 sequence
+  return clickPowerByLevel(lvl);
 }
 
 export function t3WelderClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t3WelderClickLevel || 0, T3_CLICK_LEVEL_MAX);
-  return (1 + lvl) / 3; // base boxes-per-click units before multiplier
+  // Welders craft boxes; align pipe consumption per click to the same sequence
+  // Boxes per click = (pipes-per-click) / PIPES_PER_BOX
+  return clickPowerByLevel(lvl) / T3_PIPE_PER_BOX;
 }
 
 export function t3ClickUpgradeCost(role: 'forger' | 'welder', level: number): number {
@@ -835,27 +846,27 @@ export const T4_CLICK_MECHANIC = { baseCostTrains: 5, growth: 1.25 } as const;
 
 export function t4LumberjackClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t4LumberjackClickLevel || 0, T4_CLICK_LEVEL_MAX);
-  return 1 + lvl; // wood-per-click units
+  return clickPowerByLevel(lvl); // wood-per-click units
 }
 export function t4SmithyClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t4SmithyClickLevel || 0, T4_CLICK_LEVEL_MAX);
-  return 1 + lvl; // steel-per-click units
+  return clickPowerByLevel(lvl); // steel-per-click units
 }
 export function t4WheelwrightClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t4WheelwrightClickLevel || 0, T4_CLICK_LEVEL_MAX);
-  return 1 + lvl; // wheels-per-click units
+  return clickPowerByLevel(lvl); // wheels-per-click units
 }
 export function t4BoilermakerClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t4BoilermakerClickLevel || 0, T4_CLICK_LEVEL_MAX);
-  return 1 + lvl; // boilers-per-click units
+  return clickPowerByLevel(lvl); // boilers-per-click units
 }
 export function t4CoachbuilderClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t4CoachbuilderClickLevel || 0, T4_CLICK_LEVEL_MAX);
-  return 1 + lvl; // cabins-per-click units
+  return clickPowerByLevel(lvl); // cabins-per-click units
 }
 export function t4MechanicClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t4MechanicClickLevel || 0, T4_CLICK_LEVEL_MAX);
-  return 1 + lvl; // trains-per-click units
+  return clickPowerByLevel(lvl); // trains-per-click units
 }
 export function t4ClickUpgradeCost(role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic', level: number): number {
   if (level >= T4_CLICK_LEVEL_MAX) return Number.POSITIVE_INFINITY;
