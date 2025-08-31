@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
-import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp } from './state.js';
+import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals } from './state.js';
 import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm } from './ui.js';
 import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige } from './game.js';
+const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
+const dTop = (...args: any[]) => { if (DEBUG_TOP) console.log('[top-debug]', ...args); };
 interface DelayedAction {
   tier: 1 | 2 | 3 | 4;
   userId: string;
@@ -138,7 +140,10 @@ function isUnknownInteractionError(err: any): boolean {
 
 async function safeUpdate(i: ButtonInteraction, view: any): Promise<boolean> {
   try {
-    await i.update(view);
+    await i.update({
+      ...(view || {}),
+      allowedMentions: { parse: [] as any[] }
+    } as any);
     return true;
   } catch (e: any) {
     if (isUnknownInteractionError(e)) {
@@ -209,7 +214,10 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           currentUser = user;
         });
         
-        let top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder'; produced?: number }>;
+        let top: Array<{ userId: string; contributed: number; role?: any; produced?: number }>;
+        let roleTotals: Record<string, number> | undefined = undefined;
+        let viewerRole: string | null = null;
+        let viewerProduced = 0;
         if (tier === 3) {
           // For Tier 3, show unified leaderboard with production data
           const allT3Users = getTopContributorsByTier(guildId, tier, 5);
@@ -227,8 +235,39 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             });
             return { ...user, role, produced };
           });
+          // Full-guild totals for percentage bars
+          roleTotals = getT3ProductionTotals(guildId) as any;
+          viewerRole = (currentUser as any)?.role3 || null;
+          if (viewerRole === 'forger') viewerProduced = (currentUser as any).pipesProduced || 0;
+          else if (viewerRole === 'welder') viewerProduced = (currentUser as any).boxesProduced || 0;
         } else {
-          top = getTopContributorsByTier(guildId, tier, 5);
+          if (tier === 4) {
+            const allT4Users = getTopContributorsByTier(guildId, tier, 5);
+            top = allT4Users.map(user => {
+              let role: any;
+              let produced = 0;
+              withGuildAndUser(guildId, user.userId, (g, u) => {
+                role = (u as any).role4;
+                if (role === 'lumberjack') produced = (u as any).woodProduced || 0;
+                else if (role === 'smithy') produced = (u as any).steelProduced || 0;
+                else if (role === 'wheelwright') produced = (u as any).wheelsProduced || 0;
+                else if (role === 'boilermaker') produced = (u as any).boilersProduced || 0;
+                else if (role === 'coachbuilder') produced = (u as any).cabinsProduced || 0;
+                else if (role === 'mechanic') produced = (u as any).trainsProduced || 0;
+              });
+              return { ...user, role, produced };
+            });
+            roleTotals = getT4ProductionTotals(guildId) as any;
+            viewerRole = (currentUser as any)?.role4 || null;
+            if (viewerRole === 'lumberjack') viewerProduced = (currentUser as any).woodProduced || 0;
+            else if (viewerRole === 'smithy') viewerProduced = (currentUser as any).steelProduced || 0;
+            else if (viewerRole === 'wheelwright') viewerProduced = (currentUser as any).wheelsProduced || 0;
+            else if (viewerRole === 'boilermaker') viewerProduced = (currentUser as any).boilersProduced || 0;
+            else if (viewerRole === 'coachbuilder') viewerProduced = (currentUser as any).cabinsProduced || 0;
+            else if (viewerRole === 'mechanic') viewerProduced = (currentUser as any).trainsProduced || 0;
+          } else {
+            top = getTopContributorsByTier(guildId, tier, 5);
+          }
         }
         
         let selectedUserId = top.length ? top[0].userId : undefined;
@@ -239,8 +278,19 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           });
         }
         const viewer = getUserRankByTier(guildId, tier, interaction.user.id);
-        view = renderLeaderboard(currentGuild, tier, top, selectedUserId, selectedUser, { viewerId: interaction.user.id, viewerRank: viewer.rank, viewerContributed: viewer.contributed });
-        await command.reply({ ...view });
+        dTop('slash /top', { tier, roleTotals, viewerRole, viewerProduced, top });
+        view = renderLeaderboard(currentGuild, tier, top, selectedUserId, selectedUser, { 
+          viewerId: interaction.user.id, 
+          viewerRank: viewer.rank, 
+          viewerContributed: viewer.contributed,
+          roleTotals,
+          viewerRole,
+          viewerProduced
+        });
+        await command.reply({
+          ...(view || {}),
+          allowedMentions: { parse: [] as any[] }
+        } as any);
       }
       return;
     }
@@ -251,6 +301,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       const [prefix, action, sub, sub2] = buttonInteraction.customId.split(':');
       if (prefix === 'top') {
         const guildId = interaction.guildId!;
+        refreshGuildContributions(guildId);
         const selectedUserId = action === 'view' ? sub : undefined;
         let view: any;
         let currentUser: any;
@@ -260,7 +311,8 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         
         withGuildAndUser(guildId, selectedUserId || interaction.user.id, (guild, selectedUser) => {
           const tier = guild.widgetTier || 1;
-          let top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder'; produced?: number }>;
+          let top: Array<{ userId: string; contributed: number; role?: any; produced?: number }>;
+          let roleTotals: Record<string, number> | undefined = undefined;
           if (tier === 3) {
             // For Tier 3, show unified leaderboard with production data
             const allT3Users = getTopContributorsByTier(guildId, tier, 5);
@@ -277,12 +329,57 @@ client.on('interactionCreate', async (interaction: Interaction) => {
               });
               return { ...user, role, produced };
             });
+            roleTotals = getT3ProductionTotals(guildId) as any;
           } else {
-            top = getTopContributorsByTier(guildId, tier, 5);
+            if (tier === 4) {
+              const allT4Users = getTopContributorsByTier(guildId, tier, 5);
+              top = allT4Users.map(user => {
+                let role: any;
+                let produced = 0;
+                withGuildAndUser(guildId, user.userId, (g, u) => {
+                  role = (u as any).role4;
+                  if (role === 'lumberjack') produced = (u as any).woodProduced || 0;
+                  else if (role === 'smithy') produced = (u as any).steelProduced || 0;
+                  else if (role === 'wheelwright') produced = (u as any).wheelsProduced || 0;
+                  else if (role === 'boilermaker') produced = (u as any).boilersProduced || 0;
+                  else if (role === 'coachbuilder') produced = (u as any).cabinsProduced || 0;
+                  else if (role === 'mechanic') produced = (u as any).trainsProduced || 0;
+                });
+                return { ...user, role, produced };
+              });
+              roleTotals = getT4ProductionTotals(guildId) as any;
+            } else {
+              top = getTopContributorsByTier(guildId, tier, 5);
+            }
           }
           
           const viewer = getUserRankByTier(guildId, tier, interaction.user.id);
-          view = renderLeaderboard(guild, tier, top, selectedUserId, selectedUserId ? selectedUser : undefined, { viewerId: interaction.user.id, viewerRank: viewer.rank, viewerContributed: viewer.contributed });
+          let viewerRole: string | null = null;
+          let viewerProduced = 0;
+          withGuildAndUser(guildId, interaction.user.id, (_g, u) => {
+            if (tier === 3) {
+              viewerRole = (u as any).role3 || null;
+              if (viewerRole === 'forger') viewerProduced = (u as any).pipesProduced || 0;
+              else if (viewerRole === 'welder') viewerProduced = (u as any).boxesProduced || 0;
+            } else if (tier === 4) {
+              viewerRole = (u as any).role4 || null;
+              if (viewerRole === 'lumberjack') viewerProduced = (u as any).woodProduced || 0;
+              else if (viewerRole === 'smithy') viewerProduced = (u as any).steelProduced || 0;
+              else if (viewerRole === 'wheelwright') viewerProduced = (u as any).wheelsProduced || 0;
+              else if (viewerRole === 'boilermaker') viewerProduced = (u as any).boilersProduced || 0;
+              else if (viewerRole === 'coachbuilder') viewerProduced = (u as any).cabinsProduced || 0;
+              else if (viewerRole === 'mechanic') viewerProduced = (u as any).trainsProduced || 0;
+            }
+          });
+          dTop('button top:view', { tier, roleTotals, top });
+          view = renderLeaderboard(guild, tier, top, selectedUserId, selectedUserId ? selectedUser : undefined, { 
+            viewerId: interaction.user.id, 
+            viewerRank: viewer.rank, 
+            viewerContributed: viewer.contributed,
+            roleTotals,
+            viewerRole,
+            viewerProduced
+          });
         });
         {
           const ok = await safeUpdate(buttonInteraction, view);

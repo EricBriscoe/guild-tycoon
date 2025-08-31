@@ -32,7 +32,7 @@ import {
   CHOP_REWARD_MULTIPLIER,
   T3_PIPE_PER_BOX
 } from './game.js';
-import { t3ForgerClickBase, t3WelderClickBase, t3ClickUpgradeCost, t3ClickUpgradeName, t4ClickUpgradeCost, t4ClickUpgradeName, t4LumberjackClickBase, t4SmithyClickBase, t4WheelwrightClickBase, t4BoilermakerClickBase, t4CoachbuilderClickBase, t4MechanicClickBase } from './game.js';
+import { t3ForgerClickBase, t3WelderClickBase, t3ClickUpgradeCost, t3ClickUpgradeName, t4ClickUpgradeCost, t4ClickUpgradeName, t4LumberjackClickBase, t4SmithyClickBase, t4WheelwrightClickBase, t4BoilermakerClickBase, t4CoachbuilderClickBase, t4MechanicClickBase, T3_CLICK_LEVEL_MAX, T4_CLICK_LEVEL_MAX } from './game.js';
 
 function fmt(n: number): string {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(2) + 'B';
@@ -134,13 +134,24 @@ export function renderTycoon(guild: Guild, user: User) {
       mechanic: (guild as any).inventory?.trains || 0
     };
     const lvl = levelMap[role];
-    const cost = t4ClickUpgradeCost(role as any, lvl);
-    const canBuyClick = canAfford(currencyInvMap[role], cost);
-    const currentName = t4ClickUpgradeName(role as any, lvl);
-    const nextName = t4ClickUpgradeName(role as any, lvl + 1);
+    const isMax4 = lvl >= T4_CLICK_LEVEL_MAX;
+    const cost = isMax4 ? 0 : t4ClickUpgradeCost(role as any, lvl);
+    const canBuyClick = !isMax4 && canAfford(currencyInvMap[role], cost);
+    const currentName = t4ClickUpgradeName(role as any, Math.min(lvl, T4_CLICK_LEVEL_MAX));
+    const nextName = isMax4 ? 'Maxed' : t4ClickUpgradeName(role as any, lvl + 1);
     const clickSection = new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${role[0].toUpperCase()}${role.slice(1)} Click Upgrade (Shared)\nCurrent: ${currentName} • +${fmt(perClick[role])} ${unitLabel(role)}/click\nNext: ${nextName} — Cost ${fmt(cost)} ${unitLabel(role)}`))
-      .setButtonAccessory(new ButtonBuilder().setCustomId(`tycoon:buy:t4click:${role}`).setStyle(canBuyClick ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(!canBuyClick).setLabel('Buy Upgrade'));
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `## ${role[0].toUpperCase()}${role.slice(1)} Click Upgrade (Shared)\n` +
+        `Current: ${currentName} • +${fmt(perClick[role])} ${unitLabel(role)}/click\n` +
+        (isMax4 ? `Next: Maxed` : `Next: ${nextName} — Cost ${fmt(cost)} ${unitLabel(role)}`)
+      ))
+      .setButtonAccessory(
+        new ButtonBuilder()
+          .setCustomId(`tycoon:buy:t4click:${role}`)
+          .setStyle(canBuyClick ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setDisabled(!canBuyClick)
+          .setLabel(isMax4 ? 'Maxed' : 'Buy Upgrade')
+      );
 
     // Automation sections per role
     const inv = (guild as any).inventory || {};
@@ -296,13 +307,18 @@ export function renderTycoon(guild: Guild, user: User) {
           new ButtonBuilder().setCustomId('tycoon:t3:choose:welder').setStyle(ButtonStyle.Primary).setLabel('Become Welder')
         );
 
+      const readyForTier4_choose = guild.tierProgress >= guild.tierGoal;
       const guildSection = new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent('## Guild • Tier 3 Progress'),
           new TextDisplayBuilder().setContent(`**Inventory:** Pipes ${fmt((guild as any).inventory?.pipes || 0)} • Boxes ${fmt((guild as any).inventory?.boxes || 0)}\n**Tier Progress (boxes):** ${fmt(guild.tierProgress)} / ${fmt(guild.tierGoal)}\n${progressBar(guild.tierProgress, guild.tierGoal)}`)
         )
         .setButtonAccessory(
-          new ButtonBuilder().setCustomId('tycoon:tier4:placeholder').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Tier 4: Coming Soon')
+          new ButtonBuilder()
+            .setCustomId('tycoon:tier4:advance')
+            .setStyle(readyForTier4_choose ? ButtonStyle.Success : ButtonStyle.Secondary)
+            .setDisabled(!readyForTier4_choose)
+            .setLabel(readyForTier4_choose ? 'Enter Tier 4' : 'Tier 4 Locked')
         );
 
       const container = new ContainerBuilder()
@@ -365,46 +381,57 @@ export function renderTycoon(guild: Guild, user: User) {
     let clickSection: any;
     if (role === 'forger') {
       const currentName = t3ClickUpgradeName('forger', fLvl);
-      const nextName = t3ClickUpgradeName('forger', fLvl + 1);
+      const isMax3F = fLvl >= T3_CLICK_LEVEL_MAX;
+      const nextName = isMax3F ? 'Maxed' : t3ClickUpgradeName('forger', fLvl + 1);
       const perClick = t3ForgerClickBase(guild) * CHOP_REWARD_MULTIPLIER;
       clickSection = new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `## Forger Click Upgrade (Shared)\nCurrent: ${currentName} • +${fmt(perClick)} pipes/click\nNext: ${nextName} — Cost ${fmt(fCost)} pipes`
+            `## Forger Click Upgrade (Shared)\n`+
+            `Current: ${currentName} • +${fmt(perClick)} pipes/click\n`+
+            (isMax3F ? `Next: Maxed` : `Next: ${nextName} — Cost ${fmt(fCost)} pipes`)
           )
         )
         .setButtonAccessory(
           new ButtonBuilder()
             .setCustomId('tycoon:buy:t3click:forger')
-            .setStyle(canBuyClickForger ? ButtonStyle.Success : ButtonStyle.Secondary)
-            .setDisabled(!canBuyClickForger)
-            .setLabel('Buy Upgrade')
+            .setStyle((!isMax3F && canBuyClickForger) ? ButtonStyle.Success : ButtonStyle.Secondary)
+            .setDisabled(isMax3F || !canBuyClickForger)
+            .setLabel(isMax3F ? 'Maxed' : 'Buy Upgrade')
         );
     } else {
       const currentName = t3ClickUpgradeName('welder', wLvl);
-      const nextName = t3ClickUpgradeName('welder', wLvl + 1);
+      const isMax3W = wLvl >= T3_CLICK_LEVEL_MAX;
+      const nextName = isMax3W ? 'Maxed' : t3ClickUpgradeName('welder', wLvl + 1);
       const perClick = t3WelderClickBase(guild) * CHOP_REWARD_MULTIPLIER;
       clickSection = new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `## Welder Click Upgrade (Shared)\nCurrent: ${currentName} • +${fmt(perClick)} boxes/click\nNext: ${nextName} — Cost ${fmt(wCost)} boxes`
+            `## Welder Click Upgrade (Shared)\n`+
+            `Current: ${currentName} • +${fmt(perClick)} boxes/click\n`+
+            (isMax3W ? `Next: Maxed` : `Next: ${nextName} — Cost ${fmt(wCost)} boxes`)
           )
         )
         .setButtonAccessory(
           new ButtonBuilder()
             .setCustomId('tycoon:buy:t3click:welder')
-            .setStyle(canBuyClickWelder ? ButtonStyle.Success : ButtonStyle.Secondary)
-            .setDisabled(!canBuyClickWelder)
-            .setLabel('Buy Upgrade')
+            .setStyle((!isMax3W && canBuyClickWelder) ? ButtonStyle.Success : ButtonStyle.Secondary)
+            .setDisabled(isMax3W || !canBuyClickWelder)
+            .setLabel(isMax3W ? 'Maxed' : 'Buy Upgrade')
         );
     }
 
+    const readyForTier4 = guild.tierProgress >= guild.tierGoal;
     const guildSection = new SectionBuilder()
       .addTextDisplayComponents(
         new TextDisplayBuilder().setContent(`## Guild • Tier 3 Progress\n**Inventory:** Pipes ${fmt((guild as any).inventory?.pipes || 0)} • Boxes ${fmt((guild as any).inventory?.boxes || 0)}\n**Tier Progress (boxes):** ${fmt(guild.tierProgress)} / ${fmt(guild.tierGoal)}\n${progressBar(guild.tierProgress, guild.tierGoal)}`)
       )
       .setButtonAccessory(
-        new ButtonBuilder().setCustomId('tycoon:tier4:placeholder').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Tier 4: Coming Soon')
+        new ButtonBuilder()
+          .setCustomId('tycoon:tier4:advance')
+          .setStyle(readyForTier4 ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setDisabled(!readyForTier4)
+          .setLabel(readyForTier4 ? 'Enter Tier 4' : 'Tier 4 Locked')
       );
 
     // Automation purchase sections depending on role
@@ -756,10 +783,17 @@ export function renderTycoon(guild: Guild, user: User) {
 export function renderLeaderboard(
   guild: Guild,
   tier: number,
-  top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder'; produced?: number }>,
+  top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder' | 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'; produced?: number }>,
   selectedUserId?: string,
   selectedUser?: User,
-  options?: { viewerId?: string; viewerRank?: number; viewerContributed?: number }
+  options?: { 
+    viewerId?: string; 
+    viewerRank?: number; 
+    viewerContributed?: number;
+    roleTotals?: Record<string, number>;
+    viewerRole?: string | null;
+    viewerProduced?: number;
+  }
 ) {
   const headerTitle = 'Top Contributors';
   const MAX_ROWS = 4; // keep total component count well under 40
@@ -769,15 +803,8 @@ export function renderLeaderboard(
 
   const listSections: any[] = [];
   const totalContributions = top.reduce((sum, t) => sum + t.contributed, 0);
-  
-  // For Tier 3, calculate role-specific totals for percentage bars
-  let roleProductionTotals: { forgers: number; welders: number } | undefined;
-  if (tier === 3) {
-    roleProductionTotals = {
-      forgers: top.filter(t => (t as any).role === 'forger').reduce((sum, t) => sum + ((t as any).produced || 0), 0),
-      welders: top.filter(t => (t as any).role === 'welder').reduce((sum, t) => sum + ((t as any).produced || 0), 0)
-    };
-  }
+  // Full-guild totals by role for Tier 3/4, provided by caller (required for accurate %)
+  const totalsByRole: Record<string, number> = options?.roleTotals || {};
   
   const medalIcon = (i: number) => (i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '');
   for (let i = 0; i < top.length; i++) {
@@ -785,12 +812,20 @@ export function renderLeaderboard(
     const isSelected = row.userId === selectedUserId;
     
     let displayValue: number, totalForPercentage: number, valueLabel: string;
-    if (tier === 3 && (row as any).role) {
-      // Show production data for Tier 3
+    if ((tier === 3 || tier === 4) && (row as any).role) {
+      // Show production data for Tier 3/4 with role-based totals
       displayValue = (row as any).produced || 0;
-      const userRole = (row as any).role;
-      totalForPercentage = userRole === 'forger' ? roleProductionTotals!.forgers : roleProductionTotals!.welders;
-      valueLabel = userRole === 'forger' ? 'pipes' : 'boxes';
+      const userRole = (row as any).role as string;
+      totalForPercentage = (totalsByRole[userRole] ?? 0);
+      if (userRole === 'forger') valueLabel = 'pipes';
+      else if (userRole === 'welder') valueLabel = 'boxes';
+      else if (userRole === 'lumberjack') valueLabel = 'wood';
+      else if (userRole === 'smithy') valueLabel = 'steel';
+      else if (userRole === 'wheelwright') valueLabel = 'wheels';
+      else if (userRole === 'boilermaker') valueLabel = 'boilers';
+      else if (userRole === 'coachbuilder') valueLabel = 'cabins';
+      else if (userRole === 'mechanic') valueLabel = 'trains';
+      else valueLabel = '';
     } else {
       // Show contribution data for Tier 1 & 2
       displayValue = row.contributed;
@@ -799,7 +834,16 @@ export function renderLeaderboard(
     }
     
     const bar = progressBar(displayValue, Math.max(1, totalForPercentage), 18);
-    const roleIcon = tier === 3 && (row as any).role ? ((row as any).role === 'forger' ? '🔧 ' : '🔩 ') : '';
+    const roleIcon = (tier === 3 || tier === 4) && (row as any).role
+      ? ((row as any).role === 'forger' ? '🔧 '
+        : (row as any).role === 'welder' ? '🔩 '
+        : (row as any).role === 'lumberjack' ? '🌲 '
+        : (row as any).role === 'smithy' ? '⚒️ '
+        : (row as any).role === 'wheelwright' ? '🛞 '
+        : (row as any).role === 'boilermaker' ? '🔥 '
+        : (row as any).role === 'coachbuilder' ? '🚃 '
+        : (row as any).role === 'mechanic' ? '🚂 ' : '')
+      : '';
     const prefix = `${medalIcon(i)}${i + 1}.`;
     const title = `${prefix} ${roleIcon}<@${row.userId}> — ${fmt(displayValue)}${valueLabel ? ' ' + valueLabel : ''}`;
     const section = new SectionBuilder()
@@ -833,7 +877,7 @@ export function renderLeaderboard(
           )
         )
         .setButtonAccessory(
-          new ButtonBuilder().setCustomId('top:noop').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting')
+          new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting')
         );
     } else if (tier === 2) {
       const a2 = (selectedUser as any).automation2 || { miners: 0, smelters: 0, foundries: 0, beamMills: 0, arcaneForge: 0 };
@@ -846,7 +890,7 @@ export function renderLeaderboard(
             `• Miners: ${a2.miners}\n• Smelters: ${a2.smelters}\n• Foundries: ${a2.foundries}\n• Beam Mills: ${a2.beamMills}\n• Arcane Forge: ${a2.arcaneForge}`
           )
         )
-        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
+        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
     } else {
       const role = (selectedUser as any).role3 || null;
       const a3 = (selectedUser as any).automation3 || {};
@@ -861,7 +905,7 @@ export function renderLeaderboard(
             `Rate: ${rateFmt(rate)}/s\n${list}`
           )
         )
-        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
+        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
     }
   }
 
@@ -872,19 +916,36 @@ export function renderLeaderboard(
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent('No contributions yet.')
         )
-        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('—'))
+        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:fallback').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('—'))
     );
   }
 
   // Include viewer rank if not in top list
   if (options?.viewerId && !top.find(t => t.userId === options.viewerId)) {
-    const bar = progressBar(options.viewerContributed || 0, Math.max(1, totalContributions), 18);
+    let youValue = options.viewerContributed || 0;
+    let youTotal = totalContributions;
+    let youLabel = '';
+    if ((tier === 3 || tier === 4) && options.viewerRole) {
+      youValue = options.viewerProduced || 0;
+      youTotal = (options.roleTotals?.[options.viewerRole] ?? youTotal);
+      const r = options.viewerRole;
+      if (r === 'forger') youLabel = 'pipes';
+      else if (r === 'welder') youLabel = 'boxes';
+      else if (r === 'lumberjack') youLabel = 'wood';
+      else if (r === 'smithy') youLabel = 'steel';
+      else if (r === 'wheelwright') youLabel = 'wheels';
+      else if (r === 'boilermaker') youLabel = 'boilers';
+      else if (r === 'coachbuilder') youLabel = 'cabins';
+      else if (r === 'mechanic') youLabel = 'trains';
+    }
+    const bar = progressBar(youValue, Math.max(1, youTotal), 18);
+    const valueText = youLabel ? `${fmt(youValue)} ${youLabel}` : `${fmt(youValue)}`;
     listSections.push(
       new SectionBuilder()
         .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`**You • #${options.viewerRank || 0} — ${fmt(options.viewerContributed || 0)}**\n${bar}`)
+          new TextDisplayBuilder().setContent(`**You • #${options.viewerRank || 0} — ${valueText}**\n${bar}`)
         )
-        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Your Rank'))
+        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:viewer').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Your Rank'))
     );
   }
 
