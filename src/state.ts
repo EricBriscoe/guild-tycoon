@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows } from './game.js';
+import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX } from './game.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'guild-tycoon.db');
@@ -268,6 +268,9 @@ function initDb(): void {
   add('w4', `ALTER TABLE tier3_users ADD COLUMN w4 INTEGER NOT NULL DEFAULT 0`);
   add('w5', `ALTER TABLE tier3_users ADD COLUMN w5 INTEGER NOT NULL DEFAULT 0`);
   add('weld_enabled', `ALTER TABLE tier3_users ADD COLUMN weld_enabled INTEGER NOT NULL DEFAULT 1`);
+  // Produced counters used by /top at Tier 3
+  add('pipes_produced', `ALTER TABLE tier3_users ADD COLUMN pipes_produced REAL NOT NULL DEFAULT 0`);
+  add('boxes_produced', `ALTER TABLE tier3_users ADD COLUMN boxes_produced REAL NOT NULL DEFAULT 0`);
 
   // Ensure click-level columns exist on tier3_guild
   const t3gcols = db!.prepare(`PRAGMA table_info(tier3_guild)`).all() as Array<{ name: string }>;
@@ -313,6 +316,41 @@ function initDb(): void {
     db!.pragma(`user_version = 1`);
   }
 
+  // Additional migrations
+  if (userVersion < 2) {
+    // Ensure Tier 4 user table has all expected columns used by code paths
+    const t4ucols = db!.prepare(`PRAGMA table_info(tier4_users)`).all() as Array<{ name: string }>;
+    const have4U = new Set(t4ucols.map(c => c.name));
+    const add4U = (name: string, ddl: string) => { if (!have4U.has(name)) db!.exec(ddl); };
+    add4U('rate_wood_per_sec', `ALTER TABLE tier4_users ADD COLUMN rate_wood_per_sec REAL NOT NULL DEFAULT 0`);
+    add4U('rate_steel_per_sec', `ALTER TABLE tier4_users ADD COLUMN rate_steel_per_sec REAL NOT NULL DEFAULT 0`);
+    add4U('rate_trains_per_sec', `ALTER TABLE tier4_users ADD COLUMN rate_trains_per_sec REAL NOT NULL DEFAULT 0`);
+    add4U('wood_produced', `ALTER TABLE tier4_users ADD COLUMN wood_produced REAL NOT NULL DEFAULT 0`);
+    add4U('steel_produced', `ALTER TABLE tier4_users ADD COLUMN steel_produced REAL NOT NULL DEFAULT 0`);
+    add4U('trains_produced', `ALTER TABLE tier4_users ADD COLUMN trains_produced REAL NOT NULL DEFAULT 0`);
+
+    // Bump user_version to 2
+    db!.pragma(`user_version = 2`);
+  }
+
+  if (userVersion < 3) {
+    // Clamp any out-of-range shared click levels to [0,5]
+    try {
+      db!.exec(`
+        UPDATE tier3_guild SET forger_click_level = CASE WHEN forger_click_level < 0 THEN 0 WHEN forger_click_level > 5 THEN 5 ELSE forger_click_level END;
+        UPDATE tier3_guild SET welder_click_level  = CASE WHEN welder_click_level  < 0 THEN 0 WHEN welder_click_level  > 5 THEN 5 ELSE welder_click_level  END;
+        UPDATE tier4_guild SET wheel_click_level   = CASE WHEN wheel_click_level   < 0 THEN 0 WHEN wheel_click_level   > 5 THEN 5 ELSE wheel_click_level   END;
+        UPDATE tier4_guild SET boiler_click_level  = CASE WHEN boiler_click_level  < 0 THEN 0 WHEN boiler_click_level  > 5 THEN 5 ELSE boiler_click_level  END;
+        UPDATE tier4_guild SET coach_click_level   = CASE WHEN coach_click_level   < 0 THEN 0 WHEN coach_click_level   > 5 THEN 5 ELSE coach_click_level   END;
+        UPDATE tier4_guild SET lumber_click_level  = CASE WHEN lumber_click_level  < 0 THEN 0 WHEN lumber_click_level  > 5 THEN 5 ELSE lumber_click_level  END;
+        UPDATE tier4_guild SET smith_click_level   = CASE WHEN smith_click_level   < 0 THEN 0 WHEN smith_click_level   > 5 THEN 5 ELSE smith_click_level   END;
+        UPDATE tier4_guild SET mech_click_level    = CASE WHEN mech_click_level    < 0 THEN 0 WHEN mech_click_level    > 5 THEN 5 ELSE mech_click_level    END;
+      `);
+    } catch (e) {
+      console.error('Migration clamp click levels failed:', e);
+    }
+    db!.pragma(`user_version = 3`);
+  }
 }
 
 function ensureGuild(guildId: string): void {
@@ -698,6 +736,38 @@ export function getTopProducersByRole(guildId: string, role: 'forger' | 'welder'
   return stmt.all(guildId, role, limit) as any[];
 }
 
+// Totals for Tier 3 production by role across the guild
+export function getT3ProductionTotals(guildId: string): { forger: number; welder: number } {
+  const forgerRow = db!.prepare(`SELECT COALESCE(SUM(pipes_produced), 0) AS s FROM tier3_users WHERE guild_id = ? AND role = 'forger'`).get(guildId) as any;
+  const welderRow = db!.prepare(`SELECT COALESCE(SUM(boxes_produced), 0) AS s FROM tier3_users WHERE guild_id = ? AND role = 'welder'`).get(guildId) as any;
+  return { forger: (forgerRow?.s || 0), welder: (welderRow?.s || 0) };
+}
+
+// Totals for Tier 4 production by role across the guild
+export function getT4ProductionTotals(guildId: string): {
+  lumberjack: number; // wood
+  smithy: number;     // steel
+  wheelwright: number; // wheels
+  boilermaker: number; // boilers
+  coachbuilder: number; // cabins
+  mechanic: number;    // trains
+} {
+  const wood = db!.prepare(`SELECT COALESCE(SUM(wood_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'lumberjack'`).get(guildId) as any;
+  const steel = db!.prepare(`SELECT COALESCE(SUM(steel_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'smithy'`).get(guildId) as any;
+  const wheels = db!.prepare(`SELECT COALESCE(SUM(wheels_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'wheelwright'`).get(guildId) as any;
+  const boilers = db!.prepare(`SELECT COALESCE(SUM(boilers_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'boilermaker'`).get(guildId) as any;
+  const cabins = db!.prepare(`SELECT COALESCE(SUM(cabins_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'coachbuilder'`).get(guildId) as any;
+  const trains = db!.prepare(`SELECT COALESCE(SUM(trains_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'mechanic'`).get(guildId) as any;
+  return {
+    lumberjack: (wood?.s || 0),
+    smithy: (steel?.s || 0),
+    wheelwright: (wheels?.s || 0),
+    boilermaker: (boilers?.s || 0),
+    coachbuilder: (cabins?.s || 0),
+    mechanic: (trains?.s || 0)
+  };
+}
+
 export function getUserContributionByTier(guildId: string, tier: number, userId: string): number {
   if (tier === 1) {
     const row = db!.prepare(`SELECT contributed_t1 AS c FROM tier1_users WHERE guild_id = ? AND user_id = ?`).get(guildId, userId) as any;
@@ -823,34 +893,98 @@ export function refreshGuildContributions(guildId: string, excludeUserId?: strin
     const rows = db!.prepare('SELECT user_id FROM users WHERE guild_id = ?').all(gid) as Array<{ user_id: string }>;
     let refreshed = 0;
     let total = 0;
-    for (const r of rows) {
-      const uid = r.user_id;
-      if (exclude && uid === exclude) continue;
-      const u = loadUser(gid, uid);
-      if (tier === 3) {
+
+    if (tier === 3) {
+      // Fair, ingredient-constrained Tier 3 distribution
+      const users: Array<{ id: string; user: User; delta: { pipes: number; boxesPotential: number } }> = [];
+      for (const r of rows) {
+        const uid = r.user_id;
+        if (exclude && uid === exclude) continue;
+        const u = loadUser(gid, uid);
         const delta = applyPassiveTicksT3(guild, u, ts);
-        const res = applyTier3GuildFlows(guild, u, delta);
-        total += (res.boxesMade || 0); // count boxes toward overall tick total
-      } else if (tier === 4) {
-        const delta4 = applyPassiveTicksT4(guild, u, ts);
-        const res4 = applyTier4GuildFlows(guild, u, delta4);
-        total += (res4.trainsMade || 0);
-      } else {
-        const gained = applyPassiveTicks(u, tier, ts);
-        if (gained > 0) {
-          applyGuildProgress(guild, gained, tier);
-          if (tier === 1) {
-            (u as any).lifetimeContributed = (u as any).lifetimeContributed + gained;
-            (u as any).contributedT1 = ((u as any).contributedT1 || 0) + gained;
-          } else if (tier === 2) {
-            (u as any).lifetimeContributed = (u as any).lifetimeContributed + gained;
-            (u as any).contributedT2 = ((u as any).contributedT2 || 0) + gained;
-          }
-          total += gained;
+        users.push({ id: uid, user: u, delta: { pipes: Math.max(0, delta.pipes || 0), boxesPotential: Math.max(0, delta.boxesPotential || 0) } });
+      }
+      // 1) Apply forging (adds to shared pipe inventory) and credit forgers
+      for (const rec of users) {
+        const { user: u, delta } = rec;
+        if (((u as any).role3 || null) === 'forger' && delta.pipes > 0) {
+          // Apply forging
+          (guild as any).inventory = (guild as any).inventory || { pipes: 0, boxes: 0 };
+          (guild as any).inventory.pipes = ((guild as any).inventory.pipes || 0) + delta.pipes;
+          (guild.totals as any).pipes = ((guild.totals as any).pipes || 0) + delta.pipes;
+          (u as any).lifetimeContributed = (u as any).lifetimeContributed + delta.pipes;
+          (u as any).contributedT3 = ((u as any).contributedT3 || 0) + delta.pipes;
+          (u as any).pipesProduced = ((u as any).pipesProduced || 0) + delta.pipes;
         }
       }
-      saveUser(gid, uid, u);
-      refreshed++;
+      // 2) Compute welder demand and fair allocation under pipe constraints
+      let totalBoxesPotential = 0;
+      for (const rec of users) {
+        const { user: u, delta } = rec;
+        if (((u as any).role3 || null) === 'welder') totalBoxesPotential += delta.boxesPotential || 0;
+      }
+      const inv = (guild as any).inventory = (guild as any).inventory || { pipes: 0, boxes: 0 };
+      const availableBoxes = (inv.pipes || 0) / T3_PIPE_PER_BOX;
+      const scale = totalBoxesPotential > 0 ? Math.min(1, availableBoxes / totalBoxesPotential) : 0;
+      let sumBoxesMade = 0;
+      let sumPipesConsumed = 0;
+      for (const rec of users) {
+        const { user: u, delta } = rec;
+        if (((u as any).role3 || null) !== 'welder') continue;
+        const boxesMade = (delta.boxesPotential || 0) * scale;
+        const consumed = boxesMade * T3_PIPE_PER_BOX;
+        if (boxesMade > 0) {
+          (u as any).lifetimeContributed = (u as any).lifetimeContributed + consumed;
+          (u as any).contributedT3 = ((u as any).contributedT3 || 0) + consumed;
+          (u as any).boxesProduced = ((u as any).boxesProduced || 0) + boxesMade;
+        }
+        sumBoxesMade += boxesMade;
+        sumPipesConsumed += consumed;
+      }
+      // Apply shared inventory effects once
+      if (sumBoxesMade > 0) {
+        inv.pipes = (inv.pipes || 0) - sumPipesConsumed;
+        inv.boxes = (inv.boxes || 0) + sumBoxesMade;
+        (guild.totals as any).boxes = ((guild.totals as any).boxes || 0) + sumBoxesMade;
+        total += sumBoxesMade;
+      }
+      // Recompute progress for Tier 3 from shared boxes inventory
+      if ((guild as any).widgetTier === 3) {
+        const invBoxes = inv.boxes || 0;
+        guild.tierProgress = Math.min(guild.tierGoal, invBoxes);
+      }
+      // Persist all users once
+      for (const rec of users) {
+        saveUser(gid, rec.id, rec.user);
+        refreshed++;
+      }
+    } else {
+      // Tiers 1,2,4 original flow per user
+      for (const r of rows) {
+        const uid = r.user_id;
+        if (exclude && uid === exclude) continue;
+        const u = loadUser(gid, uid);
+        if (tier === 4) {
+          const delta4 = applyPassiveTicksT4(guild, u, ts);
+          const res4 = applyTier4GuildFlows(guild, u, delta4);
+          total += (res4.trainsMade || 0);
+        } else {
+          const gained = applyPassiveTicks(u, tier, ts);
+          if (gained > 0) {
+            applyGuildProgress(guild, gained, tier);
+            if (tier === 1) {
+              (u as any).lifetimeContributed = (u as any).lifetimeContributed + gained;
+              (u as any).contributedT1 = ((u as any).contributedT1 || 0) + gained;
+            } else if (tier === 2) {
+              (u as any).lifetimeContributed = (u as any).lifetimeContributed + gained;
+              (u as any).contributedT2 = ((u as any).contributedT2 || 0) + gained;
+            }
+            total += gained;
+          }
+        }
+        saveUser(gid, uid, u);
+        refreshed++;
+      }
     }
     saveGuild(guild);
     return { usersRefreshed: refreshed, totalGained: total };

@@ -501,6 +501,7 @@ export function advanceTierIfReady(guild: Guild): { tierUp: boolean } {
 export const T3_PIPE_PER_BOX = TIER_3_RECIPES.PIPES_PER_BOX; // from config
 
 // Tier 3 Shared Click Upgrades (per-role, guild-shared)
+export const T3_CLICK_LEVEL_MAX = 5 as const;
 export const T3_CLICK_FORGER = { baseCostPipes: 600, growth: 1.25 } as const;
 export const T3_CLICK_WELDER = { baseCostBoxes: 60, growth: 1.25 } as const;
 
@@ -594,16 +595,17 @@ export function t4ClickUpgradeName(
 }
 
 export function t3ForgerClickBase(guild: Guild): number {
-  const lvl = (guild as any).t3ForgerClickLevel || 0;
+  const lvl = Math.min((guild as any).t3ForgerClickLevel || 0, T3_CLICK_LEVEL_MAX);
   return 1 + lvl; // base pipes-per-click units before multiplier
 }
 
 export function t3WelderClickBase(guild: Guild): number {
-  const lvl = (guild as any).t3WelderClickLevel || 0;
+  const lvl = Math.min((guild as any).t3WelderClickLevel || 0, T3_CLICK_LEVEL_MAX);
   return (1 + lvl) / 3; // base boxes-per-click units before multiplier
 }
 
 export function t3ClickUpgradeCost(role: 'forger' | 'welder', level: number): number {
+  if (level >= T3_CLICK_LEVEL_MAX) return Number.POSITIVE_INFINITY;
   if (role === 'forger') return Math.floor(T3_CLICK_FORGER.baseCostPipes * Math.pow(T3_CLICK_FORGER.growth, level));
   return Math.floor(T3_CLICK_WELDER.baseCostBoxes * Math.pow(T3_CLICK_WELDER.growth, level));
 }
@@ -785,6 +787,7 @@ export function tryBuyT3ClickUpgrade(guild: Guild, role: 'forger' | 'welder'): {
   (guild as any).inventory = (guild as any).inventory || { pipes: 0, boxes: 0 };
   if (role === 'forger') {
     const lvl = (guild as any).t3ForgerClickLevel || 0;
+    if (lvl >= T3_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t3ClickUpgradeCost('forger', lvl);
     const inv = (guild as any).inventory.pipes || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough pipes' };
@@ -797,6 +800,7 @@ export function tryBuyT3ClickUpgrade(guild: Guild, role: 'forger' | 'welder'): {
     return { ok: true, newLevel: lvl + 1, cost };
   } else {
     const lvl = (guild as any).t3WelderClickLevel || 0;
+    if (lvl >= T3_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t3ClickUpgradeCost('welder', lvl);
     const inv = (guild as any).inventory.boxes || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough boxes' };
@@ -821,6 +825,7 @@ export const T4_BOILERS_PER_TRAIN = TIER_4_RECIPES.BOILERS_PER_TRAIN;
 export const T4_CABINS_PER_TRAIN = TIER_4_RECIPES.CABINS_PER_TRAIN;
 
 // Tier 4 Shared Click Upgrades (per-role)
+export const T4_CLICK_LEVEL_MAX = 5 as const;
 export const T4_CLICK_LUMBERJACK = { baseCostWood: 50, growth: 1.25 } as const;
 export const T4_CLICK_SMITHY = { baseCostSteel: 30, growth: 1.25 } as const;
 export const T4_CLICK_WHEELWRIGHT = { baseCostWheels: 40, growth: 1.25 } as const;
@@ -829,30 +834,31 @@ export const T4_CLICK_COACH = { baseCostCabins: 10, growth: 1.25 } as const;
 export const T4_CLICK_MECHANIC = { baseCostTrains: 5, growth: 1.25 } as const;
 
 export function t4LumberjackClickBase(guild: Guild): number {
-  const lvl = (guild as any).t4LumberjackClickLevel || 0;
+  const lvl = Math.min((guild as any).t4LumberjackClickLevel || 0, T4_CLICK_LEVEL_MAX);
   return 1 + lvl; // wood-per-click units
 }
 export function t4SmithyClickBase(guild: Guild): number {
-  const lvl = (guild as any).t4SmithyClickLevel || 0;
+  const lvl = Math.min((guild as any).t4SmithyClickLevel || 0, T4_CLICK_LEVEL_MAX);
   return 1 + lvl; // steel-per-click units
 }
 export function t4WheelwrightClickBase(guild: Guild): number {
-  const lvl = (guild as any).t4WheelwrightClickLevel || 0;
+  const lvl = Math.min((guild as any).t4WheelwrightClickLevel || 0, T4_CLICK_LEVEL_MAX);
   return 1 + lvl; // wheels-per-click units
 }
 export function t4BoilermakerClickBase(guild: Guild): number {
-  const lvl = (guild as any).t4BoilermakerClickLevel || 0;
+  const lvl = Math.min((guild as any).t4BoilermakerClickLevel || 0, T4_CLICK_LEVEL_MAX);
   return 1 + lvl; // boilers-per-click units
 }
 export function t4CoachbuilderClickBase(guild: Guild): number {
-  const lvl = (guild as any).t4CoachbuilderClickLevel || 0;
+  const lvl = Math.min((guild as any).t4CoachbuilderClickLevel || 0, T4_CLICK_LEVEL_MAX);
   return 1 + lvl; // cabins-per-click units
 }
 export function t4MechanicClickBase(guild: Guild): number {
-  const lvl = (guild as any).t4MechanicClickLevel || 0;
+  const lvl = Math.min((guild as any).t4MechanicClickLevel || 0, T4_CLICK_LEVEL_MAX);
   return 1 + lvl; // trains-per-click units
 }
 export function t4ClickUpgradeCost(role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic', level: number): number {
+  if (level >= T4_CLICK_LEVEL_MAX) return Number.POSITIVE_INFINITY;
   if (role === 'lumberjack') return Math.floor(T4_CLICK_LUMBERJACK.baseCostWood * Math.pow(T4_CLICK_LUMBERJACK.growth, level));
   if (role === 'smithy') return Math.floor(T4_CLICK_SMITHY.baseCostSteel * Math.pow(T4_CLICK_SMITHY.growth, level));
   if (role === 'wheelwright') return Math.floor(T4_CLICK_WHEELWRIGHT.baseCostWheels * Math.pow(T4_CLICK_WHEELWRIGHT.growth, level));
@@ -1020,6 +1026,7 @@ export function tryBuyT4ClickUpgrade(guild: Guild, role: 'lumberjack' | 'smithy'
   
   if (role === 'lumberjack') {
     const lvl = (guild as any).t4LumberjackClickLevel || 0;
+    if (lvl >= T4_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t4ClickUpgradeCost('lumberjack', lvl);
     const inv = (guild as any).inventory.wood || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough wood' };
@@ -1028,6 +1035,7 @@ export function tryBuyT4ClickUpgrade(guild: Guild, role: 'lumberjack' | 'smithy'
     return { ok: true, newLevel: lvl + 1, cost };
   } else if (role === 'smithy') {
     const lvl = (guild as any).t4SmithyClickLevel || 0;
+    if (lvl >= T4_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t4ClickUpgradeCost('smithy', lvl);
     const inv = (guild as any).inventory.steel || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough steel' };
@@ -1036,6 +1044,7 @@ export function tryBuyT4ClickUpgrade(guild: Guild, role: 'lumberjack' | 'smithy'
     return { ok: true, newLevel: lvl + 1, cost };
   } else if (role === 'wheelwright') {
     const lvl = (guild as any).t4WheelwrightClickLevel || 0;
+    if (lvl >= T4_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t4ClickUpgradeCost('wheelwright', lvl);
     const inv = (guild as any).inventory.wheels || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough wheels' };
@@ -1044,6 +1053,7 @@ export function tryBuyT4ClickUpgrade(guild: Guild, role: 'lumberjack' | 'smithy'
     return { ok: true, newLevel: lvl + 1, cost };
   } else if (role === 'boilermaker') {
     const lvl = (guild as any).t4BoilermakerClickLevel || 0;
+    if (lvl >= T4_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t4ClickUpgradeCost('boilermaker', lvl);
     const inv = (guild as any).inventory.boilers || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough boilers' };
@@ -1052,6 +1062,7 @@ export function tryBuyT4ClickUpgrade(guild: Guild, role: 'lumberjack' | 'smithy'
     return { ok: true, newLevel: lvl + 1, cost };
   } else if (role === 'coachbuilder') {
     const lvl = (guild as any).t4CoachbuilderClickLevel || 0;
+    if (lvl >= T4_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t4ClickUpgradeCost('coachbuilder', lvl);
     const inv = (guild as any).inventory.cabins || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough cabins' };
@@ -1060,6 +1071,7 @@ export function tryBuyT4ClickUpgrade(guild: Guild, role: 'lumberjack' | 'smithy'
     return { ok: true, newLevel: lvl + 1, cost };
   } else { // mechanic
     const lvl = (guild as any).t4MechanicClickLevel || 0;
+    if (lvl >= T4_CLICK_LEVEL_MAX) return { ok: false, reason: 'Max level reached' };
     const cost = t4ClickUpgradeCost('mechanic', lvl);
     const inv = (guild as any).inventory.trains || 0;
     if (!canAfford(inv, cost)) return { ok: false, reason: 'Not enough trains' };
