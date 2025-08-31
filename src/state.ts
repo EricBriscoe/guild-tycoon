@@ -736,6 +736,21 @@ export function getTopProducersByRole(guildId: string, role: 'forger' | 'welder'
   return stmt.all(guildId, role, limit) as any[];
 }
 
+// List users in a guild by Tier 3 role
+export function getUsersByRoleT3(guildId: string, role: 'forger' | 'welder'): string[] {
+  const rows = db!.prepare(`SELECT user_id AS userId FROM tier3_users WHERE guild_id = ? AND role = ?`).all(guildId, role) as Array<{ userId: string }>;
+  return rows.map(r => r.userId);
+}
+
+// List users in a guild by Tier 4 role
+export function getUsersByRoleT4(
+  guildId: string,
+  role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'
+): string[] {
+  const rows = db!.prepare(`SELECT user_id AS userId FROM tier4_users WHERE guild_id = ? AND role = ?`).all(guildId, role) as Array<{ userId: string }>;
+  return rows.map(r => r.userId);
+}
+
 // Totals for Tier 3 production by role across the guild
 export function getT3ProductionTotals(guildId: string): { forger: number; welder: number } {
   const forgerRow = db!.prepare(`SELECT COALESCE(SUM(pipes_produced), 0) AS s FROM tier3_users WHERE guild_id = ? AND role = 'forger'`).get(guildId) as any;

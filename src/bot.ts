@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
-import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals } from './state.js';
+import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4 } from './state.js';
 import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm } from './ui.js';
-import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige } from './game.js';
+import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige, T3_PIPE_PER_BOX, T4_STEEL_PER_WHEEL, T4_WOOD_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
 const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
 const dTop = (...args: any[]) => { if (DEBUG_TOP) console.log('[top-debug]', ...args); };
 interface DelayedAction {
@@ -166,6 +166,36 @@ async function ensureGuildInteraction(interaction: Interaction): Promise<boolean
 
 client.on('interactionCreate', async (interaction: Interaction) => {
   try {
+    // Autocomplete for /activity role
+    if ((interaction as any).isAutocomplete?.()) {
+      const auto: any = interaction as any;
+      if (!interaction.inGuild?.()) {
+        await auto.respond([]);
+        return;
+      }
+      if (auto.commandName === 'activity') {
+        const guildId = interaction.guildId!;
+        let tier = 1;
+        withGuildAndUser(guildId, interaction.user.id, (g, u) => { tier = g.widgetTier || 1; });
+        const q = (auto.options?.getFocused?.()?.value || auto.options?.getFocused?.() || '').toString().toLowerCase();
+        const rolesT3 = [
+          { value: 'forger', name: 'Forger' },
+          { value: 'welder', name: 'Welder' }
+        ];
+        const rolesT4 = [
+          { value: 'lumberjack', name: 'Lumberjack' },
+          { value: 'smithy', name: 'Smithy' },
+          { value: 'wheelwright', name: 'Wheelwright' },
+          { value: 'boilermaker', name: 'Boilermaker' },
+          { value: 'coachbuilder', name: 'Coachbuilder' },
+          { value: 'mechanic', name: 'Mechanic' }
+        ];
+        const source = tier === 3 ? rolesT3 : tier === 4 ? rolesT4 : [];
+        const filtered = source.filter(r => r.name.toLowerCase().includes(q) || r.value.includes(q)).slice(0, 25);
+        await auto.respond(filtered);
+        return;
+      }
+    }
     if (interaction.type === InteractionType.ApplicationCommand) {
       const command = interaction as ChatInputCommandInteraction;
       if (command.commandName === 'tycoon') {
@@ -290,6 +320,112 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         await command.reply({
           ...(view || {}),
           allowedMentions: { parse: [] as any[] }
+        } as any);
+      }
+      if (command.commandName === 'activity') {
+        if (!(await ensureGuildInteraction(interaction))) return;
+        const guildId = interaction.guildId!;
+        // Keep state fresh so rates reflect recent automation
+        refreshGuildContributions(guildId);
+        const roleOpt = (command as any).options?.getString('role') as string | null;
+        let tier = 1;
+        withGuildAndUser(guildId, interaction.user.id, (g, u) => {
+          tier = g.widgetTier || 1;
+        });
+
+        // Helper to format small rates consistently
+        const rf = (n: number) => {
+          if (!isFinite(n) || !n) return '0.00';
+          return Math.abs(n) < 1000 ? n.toFixed(2) : Math.floor(n).toString();
+        };
+
+        // Helper to build a report for one role
+        const buildForRole = (role: string): string => {
+          const active: string[] = [];
+          const inactive: string[] = [];
+          if (tier === 3) {
+            if (role !== 'forger' && role !== 'welder') return '';
+            const ids = getUsersByRoleT3(guildId, role as any);
+            for (const uid of ids) {
+              withGuildAndUser(guildId, uid, (g, u) => {
+                if (role === 'welder') {
+                  const on = (u as any).weldPassiveEnabled !== false;
+                  if (on) {
+                    const boxesRate = (u as any).rates?.boxesPerSec || 0;
+                    const pipesRate = boxesRate * T3_PIPE_PER_BOX;
+                    active.push(`<@${uid}> (${rf(pipesRate)} pipes/s)`);
+                  } else {
+                    inactive.push(`<@${uid}>`);
+                  }
+                } else {
+                  const rate = (u as any).rates?.pipesPerSec || 0;
+                  (rate > 0 ? active : inactive).push(`<@${uid}>`);
+                }
+              });
+            }
+          } else if (tier === 4) {
+            const valid = ['lumberjack','smithy','wheelwright','boilermaker','coachbuilder','mechanic'];
+            if (!valid.includes(role)) return '';
+            const ids = getUsersByRoleT4(guildId, role as any);
+            for (const uid of ids) {
+              withGuildAndUser(guildId, uid, (g, u) => {
+                const rateKey = role === 'lumberjack' ? 'woodPerSec'
+                  : role === 'smithy' ? 'steelPerSec'
+                  : role === 'wheelwright' ? 'wheelsPerSec'
+                  : role === 'boilermaker' ? 'boilersPerSec'
+                  : role === 'coachbuilder' ? 'cabinsPerSec'
+                  : 'trainsPerSec';
+                const rate = (u as any).rates?.[rateKey] || 0;
+                if (rate > 0) {
+                  if (role === 'wheelwright') {
+                    const steel = rate * T4_STEEL_PER_WHEEL;
+                    const wood = rate * T4_WOOD_PER_WHEEL;
+                    active.push(`<@${uid}> (${rf(steel)} steel/s, ${rf(wood)} wood/s)`);
+                  } else if (role === 'boilermaker') {
+                    const steel = rate * T4_STEEL_PER_BOILER;
+                    active.push(`<@${uid}> (${rf(steel)} steel/s)`);
+                  } else if (role === 'coachbuilder') {
+                    const wood = rate * T4_WOOD_PER_CABIN;
+                    active.push(`<@${uid}> (${rf(wood)} wood/s)`);
+                  } else if (role === 'mechanic') {
+                    const wheels = rate * T4_WHEELS_PER_TRAIN;
+                    const boilers = rate * T4_BOILERS_PER_TRAIN;
+                    const cabins = rate * T4_CABINS_PER_TRAIN;
+                    active.push(`<@${uid}> (${rf(wheels)} wheels/s, ${rf(boilers)} boilers/s, ${rf(cabins)} cabins/s)`);
+                  } else {
+                    // lumberjack/smithy don't consume inputs; just list as active
+                    active.push(`<@${uid}>`);
+                  }
+                } else {
+                  inactive.push(`<@${uid}>`);
+                }
+              });
+            }
+          } else {
+            return `Tier ${tier} has no roles.`;
+          }
+          const roleTitle = role[0].toUpperCase() + role.slice(1);
+          const activeLine = active.length ? active.join(', ') : 'None';
+          const inactiveLine = inactive.length ? inactive.join(', ') : 'None';
+          return `## ${roleTitle}\nActive: ${activeLine}\nInactive: ${inactiveLine}`;
+        };
+
+        let content = '';
+        if (tier === 3) {
+          const roles = roleOpt ? [roleOpt] : ['forger','welder'];
+          content = roles.map(r => buildForRole(r)).filter(Boolean).join('\n\n');
+        } else if (tier === 4) {
+          const valid = ['lumberjack','smithy','wheelwright','boilermaker','coachbuilder','mechanic'];
+          const roles = roleOpt ? [roleOpt] : valid;
+          content = roles.map(r => buildForRole(r)).filter(Boolean).join('\n\n');
+        } else {
+          content = `Tier ${tier} has no roles.`;
+        }
+
+        await command.reply({
+          content,
+          allowedMentions: { parse: [] as any[] },
+          flags: MessageFlags.Ephemeral
         } as any);
       }
       return;
