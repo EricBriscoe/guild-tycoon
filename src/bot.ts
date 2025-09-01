@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
-import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4 } from './state.js';
+import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction } from './state.js';
 import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm } from './ui.js';
 import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige, T3_PIPE_PER_BOX, T4_STEEL_PER_WHEEL, T4_WOOD_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
 const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
@@ -249,45 +249,44 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         let viewerRole: string | null = null;
         let viewerProduced = 0;
         if (tier === 3) {
-          // For Tier 3, show unified leaderboard with production data
-          const allT3Users = getTopContributorsByTier(guildId, tier, 5);
-          top = allT3Users.map(user => {
-            // Get user role and production data
-            let role: 'forger' | 'welder' | undefined;
-            let produced = 0;
-            withGuildAndUser(guildId, user.userId, (g, u) => {
-              role = (u as any).role3;
-              if (role === 'forger') {
-                produced = (u as any).pipesProduced || 0;
-              } else if (role === 'welder') {
-                produced = (u as any).boxesProduced || 0;
-              }
-            });
-            return { ...user, role, produced };
-          });
-          // Full-guild totals for percentage bars
+          // For Tier 3, rank by percent-of-role (produced / total[role])
+          const rows = getAllT3UsersProduction(guildId);
           roleTotals = getT3ProductionTotals(guildId) as any;
+          const enriched = rows
+            .map(r => {
+              const role = (r.role || undefined) as any;
+              const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
+              const total = role ? (roleTotals as any)[role] || 0 : 0;
+              const percent = total > 0 ? (produced / total) : 0;
+              return { userId: r.userId, contributed: produced, role, produced, percent };
+            })
+            .filter(x => x.role && x.produced > 0);
+          enriched.sort((a, b) => b.percent - a.percent);
+          top = enriched;
           viewerRole = (currentUser as any)?.role3 || null;
           if (viewerRole === 'forger') viewerProduced = (currentUser as any).pipesProduced || 0;
           else if (viewerRole === 'welder') viewerProduced = (currentUser as any).boxesProduced || 0;
         } else {
           if (tier === 4) {
-            const allT4Users = getTopContributorsByTier(guildId, tier, 5);
-            top = allT4Users.map(user => {
-              let role: any;
-              let produced = 0;
-              withGuildAndUser(guildId, user.userId, (g, u) => {
-                role = (u as any).role4;
-                if (role === 'lumberjack') produced = (u as any).woodProduced || 0;
-                else if (role === 'smithy') produced = (u as any).steelProduced || 0;
-                else if (role === 'wheelwright') produced = (u as any).wheelsProduced || 0;
-                else if (role === 'boilermaker') produced = (u as any).boilersProduced || 0;
-                else if (role === 'coachbuilder') produced = (u as any).cabinsProduced || 0;
-                else if (role === 'mechanic') produced = (u as any).trainsProduced || 0;
-              });
-              return { ...user, role, produced };
-            });
+            const rows = getAllT4UsersProduction(guildId);
             roleTotals = getT4ProductionTotals(guildId) as any;
+            const enriched = rows
+              .map(r => {
+                const role = (r.role || undefined) as any;
+                let produced = 0;
+                if (role === 'lumberjack') produced = r.woodProduced || 0;
+                else if (role === 'smithy') produced = r.steelProduced || 0;
+                else if (role === 'wheelwright') produced = r.wheelsProduced || 0;
+                else if (role === 'boilermaker') produced = r.boilersProduced || 0;
+                else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
+                else if (role === 'mechanic') produced = r.trainsProduced || 0;
+                const total = role ? (roleTotals as any)[role] || 0 : 0;
+                const percent = total > 0 ? (produced / total) : 0;
+                return { userId: r.userId, contributed: produced, role, produced, percent };
+              })
+              .filter(x => x.role && x.produced > 0);
+            enriched.sort((a, b) => b.percent - a.percent);
+            top = enriched;
             viewerRole = (currentUser as any)?.role4 || null;
             if (viewerRole === 'lumberjack') viewerProduced = (currentUser as any).woodProduced || 0;
             else if (viewerRole === 'smithy') viewerProduced = (currentUser as any).steelProduced || 0;
@@ -447,43 +446,44 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         
         withGuildAndUser(guildId, selectedUserId || interaction.user.id, (guild, selectedUser) => {
           const tier = guild.widgetTier || 1;
-          let top: Array<{ userId: string; contributed: number; role?: any; produced?: number }>;
+          let top: Array<{ userId: string; contributed: number; role?: any; produced?: number; percent?: number }>;
           let roleTotals: Record<string, number> | undefined = undefined;
           if (tier === 3) {
-            // For Tier 3, show unified leaderboard with production data
-            const allT3Users = getTopContributorsByTier(guildId, tier, 5);
-            top = allT3Users.map(user => {
-              let role: 'forger' | 'welder' | undefined;
-              let produced = 0;
-              withGuildAndUser(guildId, user.userId, (g, u) => {
-                role = (u as any).role3;
-                if (role === 'forger') {
-                  produced = (u as any).pipesProduced || 0;
-                } else if (role === 'welder') {
-                  produced = (u as any).boxesProduced || 0;
-                }
-              });
-              return { ...user, role, produced };
-            });
+            // For Tier 3, rank by percent-of-role
+            const rows = getAllT3UsersProduction(guildId);
             roleTotals = getT3ProductionTotals(guildId) as any;
+            const enriched = rows
+              .map(r => {
+                const role = (r.role || undefined) as any;
+                const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
+                const total = role ? (roleTotals as any)[role] || 0 : 0;
+                const percent = total > 0 ? (produced / total) : 0;
+                return { userId: r.userId, contributed: produced, role, produced, percent };
+              })
+              .filter(x => x.role && x.produced > 0);
+            enriched.sort((a, b) => b.percent - a.percent);
+            top = enriched;
           } else {
             if (tier === 4) {
-              const allT4Users = getTopContributorsByTier(guildId, tier, 5);
-              top = allT4Users.map(user => {
-                let role: any;
-                let produced = 0;
-                withGuildAndUser(guildId, user.userId, (g, u) => {
-                  role = (u as any).role4;
-                  if (role === 'lumberjack') produced = (u as any).woodProduced || 0;
-                  else if (role === 'smithy') produced = (u as any).steelProduced || 0;
-                  else if (role === 'wheelwright') produced = (u as any).wheelsProduced || 0;
-                  else if (role === 'boilermaker') produced = (u as any).boilersProduced || 0;
-                  else if (role === 'coachbuilder') produced = (u as any).cabinsProduced || 0;
-                  else if (role === 'mechanic') produced = (u as any).trainsProduced || 0;
-                });
-                return { ...user, role, produced };
-              });
+              const rows = getAllT4UsersProduction(guildId);
               roleTotals = getT4ProductionTotals(guildId) as any;
+              const enriched = rows
+                .map(r => {
+                  const role = (r.role || undefined) as any;
+                  let produced = 0;
+                  if (role === 'lumberjack') produced = r.woodProduced || 0;
+                  else if (role === 'smithy') produced = r.steelProduced || 0;
+                  else if (role === 'wheelwright') produced = r.wheelsProduced || 0;
+                  else if (role === 'boilermaker') produced = r.boilersProduced || 0;
+                  else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
+                  else if (role === 'mechanic') produced = r.trainsProduced || 0;
+                  const total = role ? (roleTotals as any)[role] || 0 : 0;
+                  const percent = total > 0 ? (produced / total) : 0;
+                  return { userId: r.userId, contributed: produced, role, produced, percent };
+                })
+                .filter(x => x.role && x.produced > 0);
+              enriched.sort((a, b) => b.percent - a.percent);
+              top = enriched;
             } else {
               top = getTopContributorsByTier(guildId, tier, 5);
             }

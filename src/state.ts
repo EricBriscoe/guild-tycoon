@@ -736,6 +736,33 @@ export function getTopProducersByRole(guildId: string, role: 'forger' | 'welder'
   return stmt.all(guildId, role, limit) as any[];
 }
 
+// Full scan helpers for percent-based ranking
+export function getAllT3UsersProduction(guildId: string): Array<{ userId: string; role: 'forger' | 'welder' | null; pipesProduced: number; boxesProduced: number }> {
+  const rows = db!.prepare(`
+    SELECT user_id AS userId, role,
+           COALESCE(pipes_produced, 0) AS pipesProduced,
+           COALESCE(boxes_produced, 0) AS boxesProduced
+    FROM tier3_users
+    WHERE guild_id = ?
+  `).all(guildId) as any[];
+  return rows as any;
+}
+
+export function getAllT4UsersProduction(guildId: string): Array<{ userId: string; role: string | null; woodProduced: number; steelProduced: number; wheelsProduced: number; boilersProduced: number; cabinsProduced: number; trainsProduced: number }> {
+  const rows = db!.prepare(`
+    SELECT user_id AS userId, role,
+           COALESCE(wood_produced, 0) AS woodProduced,
+           COALESCE(steel_produced, 0) AS steelProduced,
+           COALESCE(wheels_produced, 0) AS wheelsProduced,
+           COALESCE(boilers_produced, 0) AS boilersProduced,
+           COALESCE(cabins_produced, 0) AS cabinsProduced,
+           COALESCE(trains_produced, 0) AS trainsProduced
+    FROM tier4_users
+    WHERE guild_id = ?
+  `).all(guildId) as any[];
+  return rows as any;
+}
+
 // List users in a guild by Tier 3 role
 export function getUsersByRoleT3(guildId: string, role: 'forger' | 'welder'): string[] {
   const rows = db!.prepare(`SELECT user_id AS userId FROM tier3_users WHERE guild_id = ? AND role = ?`).all(guildId, role) as Array<{ userId: string }>;
