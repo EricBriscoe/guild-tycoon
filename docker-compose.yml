@@ -4,8 +4,10 @@ services:
     container_name: guild-tycoon-bot
     env_file:
       - .env
-    volumes:
-      - ./data:/app/data
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/guild_tycoon
+    depends_on:
+      - postgres
     restart: unless-stopped
     command: ["node", "dist/bot.js"]
 
@@ -17,3 +19,18 @@ services:
     command: ["node", "dist/register-commands.js"]
     profiles: ["setup"]
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: guild-tycoon-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=guild_tycoon
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:

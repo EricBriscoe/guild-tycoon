@@ -4,9 +4,6 @@ WORKDIR /app
 # Copy package files
 COPY package.json package-lock.json* tsconfig.json ./
 
-# System deps to build native modules (better-sqlite3)
-RUN apk add --no-cache python3 make g++
-
 # Install all dependencies (including dev dependencies for TypeScript compilation)
 RUN npm ci || npm install
 
@@ -32,8 +29,5 @@ COPY --from=builder /app/node_modules ./node_modules
 # Copy compiled JavaScript from builder stage
 COPY --from=builder /app/dist ./dist
 COPY README.md ./
-
-# Ensure data dir exists at runtime
-RUN mkdir -p /app/data
 
 CMD ["node", "dist/bot.js"]

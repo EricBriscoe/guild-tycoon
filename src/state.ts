@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import { PoolClient } from 'pg';
+import { exec, qAll, qAllTx, qOne, qOneTx, qRun, qRunTx, transaction } from './db.js';
 import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX } from './game.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'guild-tycoon.db');
 
 interface GuildState extends Guild {
   id: string;
@@ -56,101 +56,93 @@ function defaultUserState(now: number = Date.now()): User {
   };
 }
 
-let db: any | null = null;
-
-function initDb(): void {
+async function initDb(): Promise<void> {
   ensureDataDir();
-  db = new Database(DB_FILE);
-  db.pragma('foreign_keys = ON');
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
-
-  // Fresh, lean schema: base tables + per-tier tables (no destructive drop)
-  db.exec(`
-    PRAGMA foreign_keys = ON;
-
+  await exec(`
     CREATE TABLE IF NOT EXISTS guilds (
       id TEXT PRIMARY KEY,
-      created_at INTEGER NOT NULL,
+      created_at BIGINT NOT NULL,
       widget_tier INTEGER NOT NULL,
       prestige_points INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS tier1_guild (
-      guild_id TEXT PRIMARY KEY,
-      tier_progress REAL NOT NULL,
-      tier_goal REAL NOT NULL,
-      total_sticks REAL NOT NULL,
-      inv_sticks REAL NOT NULL DEFAULT 0,
-      axe_level INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (guild_id) REFERENCES guilds(id) ON DELETE CASCADE
+      guild_id TEXT PRIMARY KEY REFERENCES guilds(id) ON DELETE CASCADE,
+      tier_progress DOUBLE PRECISION NOT NULL,
+      tier_goal DOUBLE PRECISION NOT NULL,
+      total_sticks DOUBLE PRECISION NOT NULL,
+      inv_sticks DOUBLE PRECISION NOT NULL DEFAULT 0,
+      axe_level INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS tier2_guild (
-      guild_id TEXT PRIMARY KEY,
-      tier_progress REAL NOT NULL,
-      tier_goal REAL NOT NULL,
-      total_beams REAL NOT NULL,
-      inv_beams REAL NOT NULL DEFAULT 0,
-      pickaxe_level INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (guild_id) REFERENCES guilds(id) ON DELETE CASCADE
+      guild_id TEXT PRIMARY KEY REFERENCES guilds(id) ON DELETE CASCADE,
+      tier_progress DOUBLE PRECISION NOT NULL,
+      tier_goal DOUBLE PRECISION NOT NULL,
+      total_beams DOUBLE PRECISION NOT NULL,
+      inv_beams DOUBLE PRECISION NOT NULL DEFAULT 0,
+      pickaxe_level INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS tier3_guild (
-      guild_id TEXT PRIMARY KEY,
-      tier_progress REAL NOT NULL,
-      tier_goal REAL NOT NULL,
-      inv_pipes REAL NOT NULL,
-      inv_boxes REAL NOT NULL,
-      total_pipes REAL NOT NULL,
-      total_boxes REAL NOT NULL,
+      guild_id TEXT PRIMARY KEY REFERENCES guilds(id) ON DELETE CASCADE,
+      tier_progress DOUBLE PRECISION NOT NULL,
+      tier_goal DOUBLE PRECISION NOT NULL,
+      inv_pipes DOUBLE PRECISION NOT NULL DEFAULT 0,
+      inv_boxes DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_pipes DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_boxes DOUBLE PRECISION NOT NULL DEFAULT 0,
       forger_click_level INTEGER NOT NULL DEFAULT 0,
-      welder_click_level INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (guild_id) REFERENCES guilds(id) ON DELETE CASCADE
+      welder_click_level INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS users (
-      guild_id TEXT NOT NULL,
+      guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL,
-      last_tick INTEGER NOT NULL,
-      last_chop_at INTEGER NOT NULL DEFAULT 0,
-      lifetime_contributed REAL NOT NULL DEFAULT 0,
-      prestige_mvp_awards INTEGER DEFAULT 0,
-      PRIMARY KEY (guild_id, user_id),
-      FOREIGN KEY (guild_id) REFERENCES guilds(id) ON DELETE CASCADE
+      last_tick BIGINT NOT NULL,
+      last_chop_at BIGINT NOT NULL DEFAULT 0,
+      lifetime_contributed DOUBLE PRECISION NOT NULL DEFAULT 0,
+      prestige_mvp_awards INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (guild_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS tier4_guild (
-      guild_id TEXT PRIMARY KEY,
-      tier_progress REAL NOT NULL,
-      tier_goal REAL NOT NULL,
-      inv_wheels REAL NOT NULL,
-      inv_boilers REAL NOT NULL,
-      inv_cabins REAL NOT NULL,
-      inv_trains REAL NOT NULL,
-      total_wheels REAL NOT NULL,
-      total_boilers REAL NOT NULL,
-      total_cabins REAL NOT NULL,
-      total_trains REAL NOT NULL,
+      guild_id TEXT PRIMARY KEY REFERENCES guilds(id) ON DELETE CASCADE,
+      tier_progress DOUBLE PRECISION NOT NULL,
+      tier_goal DOUBLE PRECISION NOT NULL,
+      inv_wheels DOUBLE PRECISION NOT NULL DEFAULT 0,
+      inv_boilers DOUBLE PRECISION NOT NULL DEFAULT 0,
+      inv_cabins DOUBLE PRECISION NOT NULL DEFAULT 0,
+      inv_trains DOUBLE PRECISION NOT NULL DEFAULT 0,
+      inv_wood DOUBLE PRECISION NOT NULL DEFAULT 0,
+      inv_steel DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_wheels DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_boilers DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_cabins DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_trains DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_wood DOUBLE PRECISION NOT NULL DEFAULT 0,
+      total_steel DOUBLE PRECISION NOT NULL DEFAULT 0,
       wheel_click_level INTEGER NOT NULL DEFAULT 0,
       boiler_click_level INTEGER NOT NULL DEFAULT 0,
       coach_click_level INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (guild_id) REFERENCES guilds(id) ON DELETE CASCADE
+      lumber_click_level INTEGER NOT NULL DEFAULT 0,
+      smith_click_level INTEGER NOT NULL DEFAULT 0,
+      mech_click_level INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS tier1_users (
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
-      sticks REAL NOT NULL,
-      axe_level INTEGER NOT NULL,
-      click_power REAL NOT NULL,
-      lumberjacks INTEGER NOT NULL,
-      foremen INTEGER NOT NULL,
-      logging_camps INTEGER NOT NULL,
-      sawmills INTEGER NOT NULL,
-      arcane_grove INTEGER NOT NULL,
-      rate_sticks_per_sec REAL NOT NULL,
-      contributed_t1 REAL NOT NULL DEFAULT 0,
+      sticks DOUBLE PRECISION NOT NULL DEFAULT 0,
+      axe_level INTEGER NOT NULL DEFAULT 0,
+      click_power DOUBLE PRECISION NOT NULL DEFAULT 1,
+      lumberjacks INTEGER NOT NULL DEFAULT 0,
+      foremen INTEGER NOT NULL DEFAULT 0,
+      logging_camps INTEGER NOT NULL DEFAULT 0,
+      sawmills INTEGER NOT NULL DEFAULT 0,
+      arcane_grove INTEGER NOT NULL DEFAULT 0,
+      rate_sticks_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      contributed_t1 DOUBLE PRECISION NOT NULL DEFAULT 0,
       PRIMARY KEY (guild_id, user_id),
       FOREIGN KEY (guild_id, user_id) REFERENCES users(guild_id, user_id) ON DELETE CASCADE
     );
@@ -158,16 +150,16 @@ function initDb(): void {
     CREATE TABLE IF NOT EXISTS tier2_users (
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
-      beams REAL NOT NULL DEFAULT 0,
+      beams DOUBLE PRECISION NOT NULL DEFAULT 0,
       pickaxe_level INTEGER NOT NULL DEFAULT 0,
-      pick_click_power REAL NOT NULL DEFAULT 1,
+      pick_click_power DOUBLE PRECISION NOT NULL DEFAULT 1,
       miners INTEGER NOT NULL DEFAULT 0,
       smelters INTEGER NOT NULL DEFAULT 0,
       foundries INTEGER NOT NULL DEFAULT 0,
       beam_mills INTEGER NOT NULL DEFAULT 0,
       arcane_forge INTEGER NOT NULL DEFAULT 0,
-      rate_beams_per_sec REAL NOT NULL DEFAULT 0,
-      contributed_t2 REAL NOT NULL DEFAULT 0,
+      rate_beams_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      contributed_t2 DOUBLE PRECISION NOT NULL DEFAULT 0,
       PRIMARY KEY (guild_id, user_id),
       FOREIGN KEY (guild_id, user_id) REFERENCES users(guild_id, user_id) ON DELETE CASCADE
     );
@@ -176,22 +168,22 @@ function initDb(): void {
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       role TEXT,
-      -- Forger automations
       f1 INTEGER NOT NULL DEFAULT 0,
       f2 INTEGER NOT NULL DEFAULT 0,
       f3 INTEGER NOT NULL DEFAULT 0,
       f4 INTEGER NOT NULL DEFAULT 0,
       f5 INTEGER NOT NULL DEFAULT 0,
-      -- Welder automations
       w1 INTEGER NOT NULL DEFAULT 0,
       w2 INTEGER NOT NULL DEFAULT 0,
       w3 INTEGER NOT NULL DEFAULT 0,
       w4 INTEGER NOT NULL DEFAULT 0,
       w5 INTEGER NOT NULL DEFAULT 0,
-      rate_pipes_per_sec REAL NOT NULL DEFAULT 0,
-      rate_boxes_per_sec REAL NOT NULL DEFAULT 0,
-      contributed_t3 REAL NOT NULL DEFAULT 0,
+      rate_pipes_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      rate_boxes_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      contributed_t3 DOUBLE PRECISION NOT NULL DEFAULT 0,
       weld_enabled INTEGER NOT NULL DEFAULT 1,
+      pipes_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
+      boxes_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
       PRIMARY KEY (guild_id, user_id),
       FOREIGN KEY (guild_id, user_id) REFERENCES users(guild_id, user_id) ON DELETE CASCADE
     );
@@ -200,109 +192,57 @@ function initDb(): void {
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       role TEXT,
-      -- Wheelwright automations
       wh1 INTEGER NOT NULL DEFAULT 0,
       wh2 INTEGER NOT NULL DEFAULT 0,
       wh3 INTEGER NOT NULL DEFAULT 0,
       wh4 INTEGER NOT NULL DEFAULT 0,
       wh5 INTEGER NOT NULL DEFAULT 0,
-      -- Boilermaker automations
       bl1 INTEGER NOT NULL DEFAULT 0,
       bl2 INTEGER NOT NULL DEFAULT 0,
       bl3 INTEGER NOT NULL DEFAULT 0,
       bl4 INTEGER NOT NULL DEFAULT 0,
       bl5 INTEGER NOT NULL DEFAULT 0,
-      -- Coachbuilder automations
       cb1 INTEGER NOT NULL DEFAULT 0,
       cb2 INTEGER NOT NULL DEFAULT 0,
       cb3 INTEGER NOT NULL DEFAULT 0,
       cb4 INTEGER NOT NULL DEFAULT 0,
       cb5 INTEGER NOT NULL DEFAULT 0,
-      rate_wheels_per_sec REAL NOT NULL DEFAULT 0,
-      rate_boilers_per_sec REAL NOT NULL DEFAULT 0,
-      rate_cabins_per_sec REAL NOT NULL DEFAULT 0,
-      contributed_t4 REAL NOT NULL DEFAULT 0,
-      wheels_produced REAL NOT NULL DEFAULT 0,
-      boilers_produced REAL NOT NULL DEFAULT 0,
-      cabins_produced REAL NOT NULL DEFAULT 0,
+      lj1 INTEGER NOT NULL DEFAULT 0,
+      lj2 INTEGER NOT NULL DEFAULT 0,
+      lj3 INTEGER NOT NULL DEFAULT 0,
+      lj4 INTEGER NOT NULL DEFAULT 0,
+      lj5 INTEGER NOT NULL DEFAULT 0,
+      sm1 INTEGER NOT NULL DEFAULT 0,
+      sm2 INTEGER NOT NULL DEFAULT 0,
+      sm3 INTEGER NOT NULL DEFAULT 0,
+      sm4 INTEGER NOT NULL DEFAULT 0,
+      sm5 INTEGER NOT NULL DEFAULT 0,
+      ta1 INTEGER NOT NULL DEFAULT 0,
+      ta2 INTEGER NOT NULL DEFAULT 0,
+      ta3 INTEGER NOT NULL DEFAULT 0,
+      ta4 INTEGER NOT NULL DEFAULT 0,
+      ta5 INTEGER NOT NULL DEFAULT 0,
+      rate_wheels_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      rate_boilers_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      rate_cabins_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      rate_wood_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      rate_steel_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      rate_trains_per_sec DOUBLE PRECISION NOT NULL DEFAULT 0,
+      contributed_t4 DOUBLE PRECISION NOT NULL DEFAULT 0,
+      wheels_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
+      boilers_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
+      cabins_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
+      wood_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
+      steel_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
+      trains_produced DOUBLE PRECISION NOT NULL DEFAULT 0,
+      wheel_enabled INTEGER NOT NULL DEFAULT 1,
+      boiler_enabled INTEGER NOT NULL DEFAULT 1,
+      coach_enabled INTEGER NOT NULL DEFAULT 1,
+      mech_enabled INTEGER NOT NULL DEFAULT 1,
       PRIMARY KEY (guild_id, user_id),
       FOREIGN KEY (guild_id, user_id) REFERENCES users(guild_id, user_id) ON DELETE CASCADE
     );
-  `);
 
-  // Run schema migrations once using user_version
-  const userVersion = (db!.pragma('user_version', { simple: true }) as number) || 0;
-  if (userVersion < 1) {
-    // Ensure inventory columns exist for T1/T2 guilds
-  const t1cols = db!.prepare(`PRAGMA table_info(tier1_guild)`).all() as Array<{ name: string }>;
-  const t1have = new Set(t1cols.map(c => c.name));
-  if (!t1have.has('inv_sticks')) db!.exec(`ALTER TABLE tier1_guild ADD COLUMN inv_sticks REAL NOT NULL DEFAULT 0`);
-  if (!t1have.has('axe_level')) db!.exec(`ALTER TABLE tier1_guild ADD COLUMN axe_level INTEGER NOT NULL DEFAULT 0`);
-  const t2cols = db!.prepare(`PRAGMA table_info(tier2_guild)`).all() as Array<{ name: string }>;
-  const t2have = new Set(t2cols.map(c => c.name));
-  if (!t2have.has('inv_beams')) db!.exec(`ALTER TABLE tier2_guild ADD COLUMN inv_beams REAL NOT NULL DEFAULT 0`);
-  if (!t2have.has('pickaxe_level')) db!.exec(`ALTER TABLE tier2_guild ADD COLUMN pickaxe_level INTEGER NOT NULL DEFAULT 0`);
-  
-  // Ensure prestige_points column exists on guilds table
-  const guildCols = db!.prepare(`PRAGMA table_info(guilds)`).all() as Array<{ name: string }>;
-  const guildHave = new Set(guildCols.map(c => c.name));
-  if (!guildHave.has('prestige_points')) db!.exec(`ALTER TABLE guilds ADD COLUMN prestige_points INTEGER NOT NULL DEFAULT 0`);
-
-  // Ensure prestige_mvp_awards column exists on users table
-  const userCols = db!.prepare(`PRAGMA table_info(users)`).all() as Array<{ name: string }>;
-  const userHave = new Set(userCols.map(c => c.name));
-  if (!userHave.has('prestige_mvp_awards')) db!.exec(`ALTER TABLE users ADD COLUMN prestige_mvp_awards INTEGER NOT NULL DEFAULT 0`);
-
-  // Ensure tier3_users has all expected columns (add if missing)
-  const t3cols = db!.prepare(`PRAGMA table_info(tier3_users)`).all() as Array<{ name: string }>;
-  const have = new Set(t3cols.map(c => c.name));
-  const add = (name: string, ddl: string) => { if (!have.has(name)) db!.exec(ddl); };
-  add('f1', `ALTER TABLE tier3_users ADD COLUMN f1 INTEGER NOT NULL DEFAULT 0`);
-  add('f2', `ALTER TABLE tier3_users ADD COLUMN f2 INTEGER NOT NULL DEFAULT 0`);
-  add('f3', `ALTER TABLE tier3_users ADD COLUMN f3 INTEGER NOT NULL DEFAULT 0`);
-  add('f4', `ALTER TABLE tier3_users ADD COLUMN f4 INTEGER NOT NULL DEFAULT 0`);
-  add('f5', `ALTER TABLE tier3_users ADD COLUMN f5 INTEGER NOT NULL DEFAULT 0`);
-  add('w1', `ALTER TABLE tier3_users ADD COLUMN w1 INTEGER NOT NULL DEFAULT 0`);
-  add('w2', `ALTER TABLE tier3_users ADD COLUMN w2 INTEGER NOT NULL DEFAULT 0`);
-  add('w3', `ALTER TABLE tier3_users ADD COLUMN w3 INTEGER NOT NULL DEFAULT 0`);
-  add('w4', `ALTER TABLE tier3_users ADD COLUMN w4 INTEGER NOT NULL DEFAULT 0`);
-  add('w5', `ALTER TABLE tier3_users ADD COLUMN w5 INTEGER NOT NULL DEFAULT 0`);
-  add('weld_enabled', `ALTER TABLE tier3_users ADD COLUMN weld_enabled INTEGER NOT NULL DEFAULT 1`);
-  // Produced counters used by /top at Tier 3
-  add('pipes_produced', `ALTER TABLE tier3_users ADD COLUMN pipes_produced REAL NOT NULL DEFAULT 0`);
-  add('boxes_produced', `ALTER TABLE tier3_users ADD COLUMN boxes_produced REAL NOT NULL DEFAULT 0`);
-
-  // Ensure click-level columns exist on tier3_guild
-  const t3gcols = db!.prepare(`PRAGMA table_info(tier3_guild)`).all() as Array<{ name: string }>;
-  const haveG = new Set(t3gcols.map(c => c.name));
-  if (!haveG.has('forger_click_level')) db!.exec(`ALTER TABLE tier3_guild ADD COLUMN forger_click_level INTEGER NOT NULL DEFAULT 0`);
-  if (!haveG.has('welder_click_level')) db!.exec(`ALTER TABLE tier3_guild ADD COLUMN welder_click_level INTEGER NOT NULL DEFAULT 0`);
-
-  // Ensure tier4 tables have expected columns
-  const t4gcols = db!.prepare(`PRAGMA table_info(tier4_guild)`).all() as Array<{ name: string }>;
-  const have4G = new Set(t4gcols.map(c => c.name));
-  const add4G = (name: string, ddl: string) => { if (!have4G.has(name)) db!.exec(ddl); };
-  add4G('inv_wheels', `ALTER TABLE tier4_guild ADD COLUMN inv_wheels REAL NOT NULL DEFAULT 0`);
-  add4G('inv_boilers', `ALTER TABLE tier4_guild ADD COLUMN inv_boilers REAL NOT NULL DEFAULT 0`);
-  add4G('inv_cabins', `ALTER TABLE tier4_guild ADD COLUMN inv_cabins REAL NOT NULL DEFAULT 0`);
-  add4G('inv_trains', `ALTER TABLE tier4_guild ADD COLUMN inv_trains REAL NOT NULL DEFAULT 0`);
-  add4G('inv_wood', `ALTER TABLE tier4_guild ADD COLUMN inv_wood REAL NOT NULL DEFAULT 0`);
-  add4G('inv_steel', `ALTER TABLE tier4_guild ADD COLUMN inv_steel REAL NOT NULL DEFAULT 0`);
-  add4G('total_wheels', `ALTER TABLE tier4_guild ADD COLUMN total_wheels REAL NOT NULL DEFAULT 0`);
-  add4G('total_boilers', `ALTER TABLE tier4_guild ADD COLUMN total_boilers REAL NOT NULL DEFAULT 0`);
-  add4G('total_cabins', `ALTER TABLE tier4_guild ADD COLUMN total_cabins REAL NOT NULL DEFAULT 0`);
-  add4G('total_trains', `ALTER TABLE tier4_guild ADD COLUMN total_trains REAL NOT NULL DEFAULT 0`);
-  add4G('total_wood', `ALTER TABLE tier4_guild ADD COLUMN total_wood REAL NOT NULL DEFAULT 0`);
-  add4G('total_steel', `ALTER TABLE tier4_guild ADD COLUMN total_steel REAL NOT NULL DEFAULT 0`);
-  add4G('wheel_click_level', `ALTER TABLE tier4_guild ADD COLUMN wheel_click_level INTEGER NOT NULL DEFAULT 0`);
-  add4G('boiler_click_level', `ALTER TABLE tier4_guild ADD COLUMN boiler_click_level INTEGER NOT NULL DEFAULT 0`);
-  add4G('coach_click_level', `ALTER TABLE tier4_guild ADD COLUMN coach_click_level INTEGER NOT NULL DEFAULT 0`);
-  add4G('lumber_click_level', `ALTER TABLE tier4_guild ADD COLUMN lumber_click_level INTEGER NOT NULL DEFAULT 0`);
-  add4G('smith_click_level', `ALTER TABLE tier4_guild ADD COLUMN smith_click_level INTEGER NOT NULL DEFAULT 0`);
-  add4G('mech_click_level', `ALTER TABLE tier4_guild ADD COLUMN mech_click_level INTEGER NOT NULL DEFAULT 0`);
-
-  // Create performance indexes for frequently queried columns
-  db!.exec(`
     CREATE INDEX IF NOT EXISTS idx_users_lifetime_contributed ON users(guild_id, lifetime_contributed DESC);
     CREATE INDEX IF NOT EXISTS idx_tier1_contributed ON tier1_users(guild_id, contributed_t1 DESC);
     CREATE INDEX IF NOT EXISTS idx_tier2_contributed ON tier2_users(guild_id, contributed_t2 DESC);
@@ -312,117 +252,51 @@ function initDb(): void {
     CREATE INDEX IF NOT EXISTS idx_tier3_role_produced_pipes ON tier3_users(guild_id, role, pipes_produced DESC);
     CREATE INDEX IF NOT EXISTS idx_tier3_role_produced_boxes ON tier3_users(guild_id, role, boxes_produced DESC);
   `);
-
-    db!.pragma(`user_version = 1`);
-  }
-
-  // Additional migrations
-  if (userVersion < 2) {
-    // Ensure Tier 4 user table has all expected columns used by code paths
-    const t4ucols = db!.prepare(`PRAGMA table_info(tier4_users)`).all() as Array<{ name: string }>;
-    const have4U = new Set(t4ucols.map(c => c.name));
-    const add4U = (name: string, ddl: string) => { if (!have4U.has(name)) db!.exec(ddl); };
-    add4U('rate_wood_per_sec', `ALTER TABLE tier4_users ADD COLUMN rate_wood_per_sec REAL NOT NULL DEFAULT 0`);
-    add4U('rate_steel_per_sec', `ALTER TABLE tier4_users ADD COLUMN rate_steel_per_sec REAL NOT NULL DEFAULT 0`);
-    add4U('rate_trains_per_sec', `ALTER TABLE tier4_users ADD COLUMN rate_trains_per_sec REAL NOT NULL DEFAULT 0`);
-    add4U('wood_produced', `ALTER TABLE tier4_users ADD COLUMN wood_produced REAL NOT NULL DEFAULT 0`);
-    add4U('steel_produced', `ALTER TABLE tier4_users ADD COLUMN steel_produced REAL NOT NULL DEFAULT 0`);
-    add4U('trains_produced', `ALTER TABLE tier4_users ADD COLUMN trains_produced REAL NOT NULL DEFAULT 0`);
-
-    // Bump user_version to 2
-    db!.pragma(`user_version = 2`);
-  }
-
-  if (userVersion < 3) {
-    // Clamp any out-of-range shared click levels to [0,5]
-    try {
-      db!.exec(`
-        UPDATE tier3_guild SET forger_click_level = CASE WHEN forger_click_level < 0 THEN 0 WHEN forger_click_level > 5 THEN 5 ELSE forger_click_level END;
-        UPDATE tier3_guild SET welder_click_level  = CASE WHEN welder_click_level  < 0 THEN 0 WHEN welder_click_level  > 5 THEN 5 ELSE welder_click_level  END;
-        UPDATE tier4_guild SET wheel_click_level   = CASE WHEN wheel_click_level   < 0 THEN 0 WHEN wheel_click_level   > 5 THEN 5 ELSE wheel_click_level   END;
-        UPDATE tier4_guild SET boiler_click_level  = CASE WHEN boiler_click_level  < 0 THEN 0 WHEN boiler_click_level  > 5 THEN 5 ELSE boiler_click_level  END;
-        UPDATE tier4_guild SET coach_click_level   = CASE WHEN coach_click_level   < 0 THEN 0 WHEN coach_click_level   > 5 THEN 5 ELSE coach_click_level   END;
-        UPDATE tier4_guild SET lumber_click_level  = CASE WHEN lumber_click_level  < 0 THEN 0 WHEN lumber_click_level  > 5 THEN 5 ELSE lumber_click_level  END;
-        UPDATE tier4_guild SET smith_click_level   = CASE WHEN smith_click_level   < 0 THEN 0 WHEN smith_click_level   > 5 THEN 5 ELSE smith_click_level   END;
-        UPDATE tier4_guild SET mech_click_level    = CASE WHEN mech_click_level    < 0 THEN 0 WHEN mech_click_level    > 5 THEN 5 ELSE mech_click_level    END;
-      `);
-    } catch (e) {
-      console.error('Migration clamp click levels failed:', e);
-    }
-    db!.pragma(`user_version = 3`);
-  }
-
-  // Add Tier 4 consumer passive toggles
-  if (userVersion < 4) {
-    try {
-      const t4ucols = db!.prepare(`PRAGMA table_info(tier4_users)`).all() as Array<{ name: string }>;
-      const have = new Set(t4ucols.map(c => c.name));
-      if (!have.has('wheel_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN wheel_enabled INTEGER NOT NULL DEFAULT 1`);
-      if (!have.has('boiler_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN boiler_enabled INTEGER NOT NULL DEFAULT 1`);
-      if (!have.has('coach_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN coach_enabled INTEGER NOT NULL DEFAULT 1`);
-      if (!have.has('mech_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN mech_enabled INTEGER NOT NULL DEFAULT 1`);
-    } catch (e) {
-      console.error('Migration add T4 passive toggles failed:', e);
-    }
-    db!.pragma(`user_version = 4`);
-  }
 }
 
-function ensureGuild(guildId: string): void {
-  const row = db!.prepare('SELECT id FROM guilds WHERE id = ?').get(guildId);
+async function ensureGuildTx(client: PoolClient, guildId: string): Promise<void> {
+  const row = await qOneTx(client, 'SELECT id FROM guilds WHERE id = ?', guildId);
   if (!row) {
     const g = defaultGuildState(guildId);
-    db!.prepare(`INSERT INTO guilds (id, created_at, widget_tier, prestige_points) VALUES (?, ?, ?, 0)`)
-      .run(g.id, g.createdAt, g.widgetTier);
-    db!.prepare(`INSERT INTO tier1_guild (guild_id, tier_progress, tier_goal, total_sticks, inv_sticks, axe_level) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(g.id, 0, 1000000, 0, 0, 0);
-    db!.prepare(`INSERT INTO tier2_guild (guild_id, tier_progress, tier_goal, total_beams, inv_beams, pickaxe_level) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(g.id, 0, 10000000, 0, 0, 0);
-    db!.prepare(`INSERT INTO tier3_guild (guild_id, tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`) 
-      .run(g.id, 0, 20000000, 0, 0, 0, 0);
-    db!.prepare(`INSERT INTO tier4_guild (guild_id, tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, total_wheels, total_boilers, total_cabins, total_trains, wheel_click_level, boiler_click_level, coach_click_level) VALUES (?, ?, ?, 0,0,0,0, 0,0,0,0, 0,0,0)`) 
-      .run(g.id, 0, 100000000);
+    await qRunTx(client, `INSERT INTO guilds (id, created_at, widget_tier, prestige_points) VALUES (?, ?, ?, 0)`, g.id, g.createdAt, g.widgetTier);
+    await qRunTx(client, `INSERT INTO tier1_guild (guild_id, tier_progress, tier_goal, total_sticks, inv_sticks, axe_level) VALUES (?, ?, ?, ?, ?, ?)`, g.id, 0, 1000000, 0, 0, 0);
+    await qRunTx(client, `INSERT INTO tier2_guild (guild_id, tier_progress, tier_goal, total_beams, inv_beams, pickaxe_level) VALUES (?, ?, ?, ?, ?, ?)`, g.id, 0, 10000000, 0, 0, 0);
+    await qRunTx(client, `INSERT INTO tier3_guild (guild_id, tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`, g.id, 0, 20000000, 0, 0, 0, 0);
+    await qRunTx(client, `INSERT INTO tier4_guild (guild_id, tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level) VALUES (?, ?, ?, 0,0,0,0, 0,0, 0,0,0,0, 0,0, 0,0,0, 0,0,0)`, g.id, 0, 100000000);
   }
 }
 
-function ensureUser(guildId: string, userId: string): void {
-  const base = db!.prepare('SELECT user_id FROM users WHERE guild_id = ? AND user_id = ?').get(guildId, userId);
+async function ensureUserTx(client: PoolClient, guildId: string, userId: string): Promise<void> {
+  const base = await qOneTx(client, 'SELECT user_id FROM users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!base) {
     const now = Date.now();
-    db!.prepare(`INSERT INTO users (guild_id, user_id, last_tick, last_chop_at, lifetime_contributed, prestige_mvp_awards) VALUES (?, ?, ?, ?, 0, 0)`) 
-      .run(guildId, userId, now, 0);
+    await qRunTx(client, `INSERT INTO users (guild_id, user_id, last_tick, last_chop_at, lifetime_contributed, prestige_mvp_awards) VALUES (?, ?, ?, ?, 0, 0)`, guildId, userId, now, 0);
   }
-  const t1 = db!.prepare('SELECT user_id FROM tier1_users WHERE guild_id = ? AND user_id = ?').get(guildId, userId);
+  const t1 = await qOneTx(client, 'SELECT user_id FROM tier1_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t1) {
-    db!.prepare(`INSERT INTO tier1_users (guild_id, user_id, sticks, axe_level, click_power, lumberjacks, foremen, logging_camps, sawmills, arcane_grove, rate_sticks_per_sec, contributed_t1) VALUES (?, ?, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)`) 
-      .run(guildId, userId);
+    await qRunTx(client, `INSERT INTO tier1_users (guild_id, user_id, sticks, axe_level, click_power, lumberjacks, foremen, logging_camps, sawmills, arcane_grove, rate_sticks_per_sec, contributed_t1) VALUES (?, ?, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)`, guildId, userId);
   }
-  const t2 = db!.prepare('SELECT user_id FROM tier2_users WHERE guild_id = ? AND user_id = ?').get(guildId, userId);
+  const t2 = await qOneTx(client, 'SELECT user_id FROM tier2_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t2) {
-    db!.prepare(`INSERT INTO tier2_users (guild_id, user_id, beams, pickaxe_level, pick_click_power, miners, smelters, foundries, beam_mills, arcane_forge, rate_beams_per_sec, contributed_t2) VALUES (?, ?, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)`) 
-      .run(guildId, userId);
+    await qRunTx(client, `INSERT INTO tier2_users (guild_id, user_id, beams, pickaxe_level, pick_click_power, miners, smelters, foundries, beam_mills, arcane_forge, rate_beams_per_sec, contributed_t2) VALUES (?, ?, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)`, guildId, userId);
   }
-  const t3 = db!.prepare('SELECT user_id FROM tier3_users WHERE guild_id = ? AND user_id = ?').get(guildId, userId);
+  const t3 = await qOneTx(client, 'SELECT user_id FROM tier3_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t3) {
-    db!.prepare(`INSERT INTO tier3_users (guild_id, user_id, role, f1, f2, f3, f4, f5, w1, w2, w3, w4, w5, rate_pipes_per_sec, rate_boxes_per_sec, contributed_t3, weld_enabled) VALUES (?, ?, NULL, 0,0,0,0,0, 0,0,0,0,0, 0, 0, 0, 1)`) 
-      .run(guildId, userId);
+    await qRunTx(client, `INSERT INTO tier3_users (guild_id, user_id, role, f1, f2, f3, f4, f5, w1, w2, w3, w4, w5, rate_pipes_per_sec, rate_boxes_per_sec, contributed_t3, weld_enabled, pipes_produced, boxes_produced) VALUES (?, ?, NULL, 0,0,0,0,0, 0,0,0,0,0, 0, 0, 0, 1, 0, 0)`, guildId, userId);
   }
-  // Ensure tier4_users row exists
-  const t4 = db!.prepare('SELECT user_id FROM tier4_users WHERE guild_id = ? AND user_id = ?').get(guildId, userId);
+  const t4 = await qOneTx(client, 'SELECT user_id FROM tier4_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t4) {
-    db!.prepare(`INSERT INTO tier4_users (guild_id, user_id, role, wh1, wh2, wh3, wh4, wh5, bl1, bl2, bl3, bl4, bl5, cb1, cb2, cb3, cb4, cb5, rate_wheels_per_sec, rate_boilers_per_sec, rate_cabins_per_sec, contributed_t4, wheels_produced, boilers_produced, cabins_produced) VALUES (?, ?, NULL, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0, 0, 0, 0, 0, 0, 0)`)
-      .run(guildId, userId);
+    await qRunTx(client, `INSERT INTO tier4_users (guild_id, user_id, role, wh1, wh2, wh3, wh4, wh5, bl1, bl2, bl3, bl4, bl5, cb1, cb2, cb3, cb4, cb5, lj1, lj2, lj3, lj4, lj5, sm1, sm2, sm3, sm4, sm5, ta1, ta2, ta3, ta4, ta5, rate_wheels_per_sec, rate_boilers_per_sec, rate_cabins_per_sec, rate_wood_per_sec, rate_steel_per_sec, rate_trains_per_sec, contributed_t4, wheels_produced, boilers_produced, cabins_produced, wood_produced, steel_produced, trains_produced, wheel_enabled, boiler_enabled, coach_enabled, mech_enabled) VALUES (?, ?, NULL, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0, 0,0,0, 0,0,0, 1,1,1,1)`, guildId, userId);
   }
-  // Schema upgrades are handled centrally during initDb migrations
 }
 
-function loadGuild(guildId: string): GuildState {
-  ensureGuild(guildId);
-  const row = db!.prepare(`SELECT id, created_at, widget_tier, prestige_points FROM guilds WHERE id = ?`).get(guildId) as any;
-  const t1 = db!.prepare(`SELECT tier_progress, tier_goal, total_sticks, inv_sticks, axe_level FROM tier1_guild WHERE guild_id = ?`).get(guildId) as any;
-  const t2 = db!.prepare(`SELECT tier_progress, tier_goal, total_beams, inv_beams, pickaxe_level FROM tier2_guild WHERE guild_id = ?`).get(guildId) as any;
-  const t3 = db!.prepare(`SELECT tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level FROM tier3_guild WHERE guild_id = ?`).get(guildId) as any;
-  const t4 = db!.prepare(`SELECT tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level FROM tier4_guild WHERE guild_id = ?`).get(guildId) as any;
+async function loadGuildTx(client: PoolClient, guildId: string): Promise<GuildState> {
+  await ensureGuildTx(client, guildId);
+  const row: any = await qOneTx(client, `SELECT id, created_at, widget_tier, prestige_points FROM guilds WHERE id = ?`, guildId);
+  const t1: any = await qOneTx(client, `SELECT tier_progress, tier_goal, total_sticks, inv_sticks, axe_level FROM tier1_guild WHERE guild_id = ?`, guildId);
+  const t2: any = await qOneTx(client, `SELECT tier_progress, tier_goal, total_beams, inv_beams, pickaxe_level FROM tier2_guild WHERE guild_id = ?`, guildId);
+  const t3: any = await qOneTx(client, `SELECT tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level FROM tier3_guild WHERE guild_id = ?`, guildId);
+  const t4: any = await qOneTx(client, `SELECT tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level FROM tier4_guild WHERE guild_id = ?`, guildId);
   const currentTier = row.widget_tier || 1;
   return {
     id: row.id,
@@ -446,33 +320,33 @@ function loadGuild(guildId: string): GuildState {
   };
 }
 
-function loadUser(guildId: string, userId: string): User {
-  ensureGuild(guildId);
-  ensureUser(guildId, userId);
-  const base = db!.prepare(`
+async function loadUserTx(client: PoolClient, guildId: string, userId: string): Promise<User> {
+  await ensureGuildTx(client, guildId);
+  await ensureUserTx(client, guildId, userId);
+  const base: any = await qOneTx(client, `
     SELECT last_tick, last_chop_at, lifetime_contributed, prestige_mvp_awards
     FROM users WHERE guild_id = ? AND user_id = ?
-  `).get(guildId, userId) as any;
-  const t1 = db!.prepare(`
+  `, guildId, userId);
+  const t1: any = await qOneTx(client, `
     SELECT sticks, axe_level, click_power, lumberjacks, foremen, logging_camps, sawmills, arcane_grove, rate_sticks_per_sec, contributed_t1
     FROM tier1_users WHERE guild_id = ? AND user_id = ?
-  `).get(guildId, userId) as any;
-  const t2 = db!.prepare(`
+  `, guildId, userId);
+  const t2: any = await qOneTx(client, `
     SELECT beams, pickaxe_level, pick_click_power, miners, smelters, foundries, beam_mills, arcane_forge, rate_beams_per_sec, contributed_t2
     FROM tier2_users WHERE guild_id = ? AND user_id = ?
-  `).get(guildId, userId) as any;
-  const t3 = db!.prepare(`
+  `, guildId, userId);
+  const t3: any = await qOneTx(client, `
     SELECT role, f1, f2, f3, f4, f5, w1, w2, w3, w4, w5, rate_pipes_per_sec, rate_boxes_per_sec, contributed_t3, weld_enabled, pipes_produced, boxes_produced
     FROM tier3_users WHERE guild_id = ? AND user_id = ?
-  `).get(guildId, userId) as any;
-  const t4 = db!.prepare(`
+  `, guildId, userId);
+  const t4: any = await qOneTx(client, `
     SELECT role, wh1, wh2, wh3, wh4, wh5, bl1, bl2, bl3, bl4, bl5, cb1, cb2, cb3, cb4, cb5,
            lj1, lj2, lj3, lj4, lj5, sm1, sm2, sm3, sm4, sm5, ta1, ta2, ta3, ta4, ta5,
            rate_wheels_per_sec, rate_boilers_per_sec, rate_cabins_per_sec, rate_wood_per_sec, rate_steel_per_sec, rate_trains_per_sec,
            contributed_t4, wheels_produced, boilers_produced, cabins_produced, wood_produced, steel_produced, trains_produced,
            wheel_enabled, boiler_enabled, coach_enabled, mech_enabled
     FROM tier4_users WHERE guild_id = ? AND user_id = ?
-  `).get(guildId, userId) as any;
+  `, guildId, userId);
   return {
     sticks: t1?.sticks || 0,
     lastTick: base?.last_tick || Date.now(),
@@ -507,7 +381,6 @@ function loadUser(guildId: string, userId: string): User {
     weldPassiveEnabled: (t3?.weld_enabled ?? 1) !== 0,
     pipesProduced: t3?.pipes_produced || 0,
     boxesProduced: t3?.boxes_produced || 0,
-    // Tier 4
     role4: t4?.role || null,
     automation4: { wh1: t4?.wh1 || 0, wh2: t4?.wh2 || 0, wh3: t4?.wh3 || 0, wh4: t4?.wh4 || 0, wh5: t4?.wh5 || 0, bl1: t4?.bl1 || 0, bl2: t4?.bl2 || 0, bl3: t4?.bl3 || 0, bl4: t4?.bl4 || 0, bl5: t4?.bl5 || 0, cb1: t4?.cb1 || 0, cb2: t4?.cb2 || 0, cb3: t4?.cb3 || 0, cb4: t4?.cb4 || 0, cb5: t4?.cb5 || 0, lj1: t4?.lj1 || 0, lj2: t4?.lj2 || 0, lj3: t4?.lj3 || 0, lj4: t4?.lj4 || 0, lj5: t4?.lj5 || 0, sm1: t4?.sm1 || 0, sm2: t4?.sm2 || 0, sm3: t4?.sm3 || 0, sm4: t4?.sm4 || 0, sm5: t4?.sm5 || 0, ta1: t4?.ta1 || 0, ta2: t4?.ta2 || 0, ta3: t4?.ta3 || 0, ta4: t4?.ta4 || 0, ta5: t4?.ta5 || 0 },
     contributedT4: t4?.contributed_t4 || 0,
@@ -524,26 +397,16 @@ function loadUser(guildId: string, userId: string): User {
   };
 }
 
-function saveGuild(g: GuildState): void {
-  db!.prepare(`UPDATE guilds SET widget_tier = ?, prestige_points = ? WHERE id = ?`).run(g.widgetTier, (g as any).prestigePoints || 0, g.id);
-  // Persist totals and inventory
-  db!.prepare(`UPDATE tier1_guild SET total_sticks = ?, inv_sticks = ?, axe_level = ? WHERE guild_id = ?`).run(g.totals.sticks, (g as any).inventory?.sticks || 0, (g as any).axeLevel || 0, g.id);
-  db!.prepare(`UPDATE tier2_guild SET total_beams = ?, inv_beams = ?, pickaxe_level = ? WHERE guild_id = ?`).run(g.totals.beams, (g as any).inventory?.beams || 0, (g as any).pickaxeLevel || 0, g.id);
-  db!.prepare(`UPDATE tier3_guild SET total_pipes = ?, total_boxes = ?, inv_pipes = ?, inv_boxes = ?, forger_click_level = ?, welder_click_level = ? WHERE guild_id = ?`).run(
-    (g as any).totals?.pipes || 0,
-    (g as any).totals?.boxes || 0,
-    (g as any).inventory?.pipes || 0,
-    (g as any).inventory?.boxes || 0,
-    (g as any).t3ForgerClickLevel || 0,
-    (g as any).t3WelderClickLevel || 0,
-    g.id
-  );
-  // Tier 4 guild persistent values
-  db!.prepare(`UPDATE tier4_guild SET 
+async function saveGuildTx(client: PoolClient, g: GuildState): Promise<void> {
+  await qRunTx(client, `UPDATE guilds SET widget_tier = ?, prestige_points = ? WHERE id = ?`, g.widgetTier, (g as any).prestigePoints || 0, g.id);
+  await qRunTx(client, `UPDATE tier1_guild SET total_sticks = ?, inv_sticks = ?, axe_level = ? WHERE guild_id = ?`, g.totals.sticks, (g as any).inventory?.sticks || 0, (g as any).axeLevel || 0, g.id);
+  await qRunTx(client, `UPDATE tier2_guild SET total_beams = ?, inv_beams = ?, pickaxe_level = ? WHERE guild_id = ?`, g.totals.beams, (g as any).inventory?.beams || 0, (g as any).pickaxeLevel || 0, g.id);
+  await qRunTx(client, `UPDATE tier3_guild SET total_pipes = ?, total_boxes = ?, inv_pipes = ?, inv_boxes = ?, forger_click_level = ?, welder_click_level = ? WHERE guild_id = ?`, (g as any).totals?.pipes || 0, (g as any).totals?.boxes || 0, (g as any).inventory?.pipes || 0, (g as any).inventory?.boxes || 0, (g as any).t3ForgerClickLevel || 0, (g as any).t3WelderClickLevel || 0, g.id);
+  await qRunTx(client, `UPDATE tier4_guild SET 
     total_wheels = ?, total_boilers = ?, total_cabins = ?, total_trains = ?, total_wood = ?, total_steel = ?,
     inv_wheels = ?, inv_boilers = ?, inv_cabins = ?, inv_trains = ?, inv_wood = ?, inv_steel = ?,
     wheel_click_level = ?, boiler_click_level = ?, coach_click_level = ?, lumber_click_level = ?, smith_click_level = ?, mech_click_level = ?
-    WHERE guild_id = ?`).run(
+    WHERE guild_id = ?`,
     (g as any).totals?.wheels || 0,
     (g as any).totals?.boilers || 0,
     (g as any).totals?.cabins || 0,
@@ -562,41 +425,38 @@ function saveGuild(g: GuildState): void {
     (g as any).t4LumberjackClickLevel || 0,
     (g as any).t4SmithyClickLevel || 0,
     (g as any).t4MechanicClickLevel || 0,
-    g.id
-  );
-  // Persist progress/goal only for active tier
+    g.id);
   if ((g as any).widgetTier === 1) {
-    db!.prepare(`UPDATE tier1_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`).run(g.tierProgress, g.tierGoal, g.id);
+    await qRunTx(client, `UPDATE tier1_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`, g.tierProgress, g.tierGoal, g.id);
   } else if ((g as any).widgetTier === 2) {
-    db!.prepare(`UPDATE tier2_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`).run(g.tierProgress, g.tierGoal, g.id);
+    await qRunTx(client, `UPDATE tier2_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`, g.tierProgress, g.tierGoal, g.id);
   } else if ((g as any).widgetTier === 3) {
-    db!.prepare(`UPDATE tier3_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`).run(g.tierProgress, g.tierGoal, g.id);
+    await qRunTx(client, `UPDATE tier3_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`, g.tierProgress, g.tierGoal, g.id);
   } else if ((g as any).widgetTier === 4) {
-    db!.prepare(`UPDATE tier4_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`).run(g.tierProgress, g.tierGoal, g.id);
+    await qRunTx(client, `UPDATE tier4_guild SET tier_progress = ?, tier_goal = ? WHERE guild_id = ?`, g.tierProgress, g.tierGoal, g.id);
   }
 }
 
-function saveUser(guildId: string, userId: string, u: User): void {
-  db!.prepare(`UPDATE users SET last_tick = ?, last_chop_at = ?, lifetime_contributed = ?, prestige_mvp_awards = ? WHERE guild_id = ? AND user_id = ?`)
-    .run(u.lastTick, u.lastChopAt || 0, u.lifetimeContributed || 0, (u as any).prestigeMvpAwards || 0, guildId, userId);
-  db!.prepare(`
+async function saveUserTx(client: PoolClient, guildId: string, userId: string, u: User): Promise<void> {
+  await qRunTx(client, `UPDATE users SET last_tick = ?, last_chop_at = ?, lifetime_contributed = ?, prestige_mvp_awards = ? WHERE guild_id = ? AND user_id = ?`, u.lastTick, u.lastChopAt || 0, u.lifetimeContributed || 0, (u as any).prestigeMvpAwards || 0, guildId, userId);
+  await qRunTx(client, `
     UPDATE tier1_users SET sticks = ?, axe_level = ?, click_power = ?, lumberjacks = ?, foremen = ?, logging_camps = ?, sawmills = ?, arcane_grove = ?, rate_sticks_per_sec = ?, contributed_t1 = ?
     WHERE guild_id = ? AND user_id = ?
-  `).run(
+  `,
     u.sticks, u.axeLevel, u.clickPower, u.automation.lumberjacks, u.automation.foremen, u.automation.loggingCamps, u.automation.sawmills, u.automation.arcaneGrove,
     u.rates.sticksPerSec, (u as any).contributedT1 || 0, guildId, userId
   );
-  db!.prepare(`
+  await qRunTx(client, `
     UPDATE tier2_users SET beams = ?, pickaxe_level = ?, pick_click_power = ?, miners = ?, smelters = ?, foundries = ?, beam_mills = ?, arcane_forge = ?, rate_beams_per_sec = ?, contributed_t2 = ?
     WHERE guild_id = ? AND user_id = ?
-  `).run(
+  `,
     (u as any).beams || 0, (u as any).pickaxeLevel || 0, (u as any).pickClickPower || 1, (u as any).automation2?.miners || 0, (u as any).automation2?.smelters || 0, (u as any).automation2?.foundries || 0, (u as any).automation2?.beamMills || 0, (u as any).automation2?.arcaneForge || 0,
     (u as any).rates?.beamsPerSec || 0, (u as any).contributedT2 || 0, guildId, userId
   );
-  db!.prepare(`
+  await qRunTx(client, `
     UPDATE tier3_users SET role = ?, f1 = ?, f2 = ?, f3 = ?, f4 = ?, f5 = ?, w1 = ?, w2 = ?, w3 = ?, w4 = ?, w5 = ?, rate_pipes_per_sec = ?, rate_boxes_per_sec = ?, contributed_t3 = ?, weld_enabled = ?, pipes_produced = ?, boxes_produced = ?
     WHERE guild_id = ? AND user_id = ?
-  `).run(
+  `,
     (u as any).role3 || null,
     (u as any).automation3?.forge1 || 0,
     (u as any).automation3?.forge2 || 0,
@@ -617,8 +477,7 @@ function saveUser(guildId: string, userId: string, u: User): void {
     guildId,
     userId
   );
-  // Tier 4 users
-  db!.prepare(`
+  await qRunTx(client, `
     UPDATE tier4_users SET role = ?,
       wh1 = ?, wh2 = ?, wh3 = ?, wh4 = ?, wh5 = ?,
       bl1 = ?, bl2 = ?, bl3 = ?, bl4 = ?, bl5 = ?,
@@ -633,7 +492,7 @@ function saveUser(guildId: string, userId: string, u: User): void {
       wood_produced = ?, steel_produced = ?, trains_produced = ?,
       wheel_enabled = ?, boiler_enabled = ?, coach_enabled = ?, mech_enabled = ?
     WHERE guild_id = ? AND user_id = ?
-  `).run(
+  `,
     (u as any).role4 || null,
     (u as any).automation4?.wh1 || 0,
     (u as any).automation4?.wh2 || 0,
@@ -687,331 +546,250 @@ function saveUser(guildId: string, userId: string, u: User): void {
   );
 }
 
-export function getTopContributors(guildId: string, limit: number = 10): Array<{ userId: string; lifetimeContributed: number }> {
-  const stmt = db!.prepare(`
-    SELECT user_id as userId, lifetime_contributed as lifetimeContributed
-    FROM users
-    WHERE guild_id = ?
-    ORDER BY lifetime_contributed DESC
-    LIMIT ?
-  `);
-  return stmt.all(guildId, limit) as any[];
+export async function getTopContributors(guildId: string, limit: number = 10): Promise<Array<{ userId: string; lifetimeContributed: number }>> {
+  const rows = await qAll<{ userId: string; lifetimeContributed: number }>(
+    `SELECT user_id as userId, lifetime_contributed as lifetimeContributed FROM users WHERE guild_id = ? ORDER BY lifetime_contributed DESC LIMIT ?`,
+    guildId, limit
+  );
+  return rows;
 }
 
-export function getTopContributorsByTier(guildId: string, tier: number, limit: number = 10): Array<{ userId: string; contributed: number }> {
+export async function getTopContributorsByTier(guildId: string, tier: number, limit: number = 10): Promise<Array<{ userId: string; contributed: number }>> {
   if (tier === 1) {
-    const stmt = db!.prepare(`
-      SELECT user_id as userId, contributed_t1 as contributed
-      FROM tier1_users
-      WHERE guild_id = ?
-      ORDER BY contributed DESC
-      LIMIT ?
-    `);
-    return stmt.all(guildId, limit) as any[];
+    return qAll(`SELECT user_id as userId, contributed_t1 as contributed FROM tier1_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
   } else if (tier === 2) {
-    const stmt = db!.prepare(`
-      SELECT user_id as userId, contributed_t2 as contributed
-      FROM tier2_users
-      WHERE guild_id = ?
-      ORDER BY contributed DESC
-      LIMIT ?
-    `);
-    return stmt.all(guildId, limit) as any[];
+    return qAll(`SELECT user_id as userId, contributed_t2 as contributed FROM tier2_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
   } else if (tier === 3) {
-    const stmt = db!.prepare(`
-      SELECT user_id as userId, contributed_t3 as contributed
-      FROM tier3_users
-      WHERE guild_id = ?
-      ORDER BY contributed DESC
-      LIMIT ?
-    `);
-    return stmt.all(guildId, limit) as any[];
+    return qAll(`SELECT user_id as userId, contributed_t3 as contributed FROM tier3_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
   } else {
-    const stmt = db!.prepare(`
-      SELECT user_id as userId, contributed_t4 as contributed
-      FROM tier4_users
-      WHERE guild_id = ?
-      ORDER BY contributed DESC
-      LIMIT ?
-    `);
-    return stmt.all(guildId, limit) as any[];
+    return qAll(`SELECT user_id as userId, contributed_t4 as contributed FROM tier4_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
   }
 }
 
-export function getTopContributorsByRole(guildId: string, role: 'forger' | 'welder', limit: number = 10): Array<{ userId: string; contributed: number }> {
-  const stmt = db!.prepare(`
-    SELECT user_id as userId, contributed_t3 as contributed
-    FROM tier3_users
-    WHERE guild_id = ? AND role = ?
-    ORDER BY contributed DESC
-    LIMIT ?
-  `);
-  return stmt.all(guildId, role, limit) as any[];
+export async function getTopContributorsByRole(guildId: string, role: 'forger' | 'welder', limit: number = 10): Promise<Array<{ userId: string; contributed: number }>> {
+  return qAll(`SELECT user_id as userId, contributed_t3 as contributed FROM tier3_users WHERE guild_id = ? AND role = ? ORDER BY contributed DESC LIMIT ?`, guildId, role, limit);
 }
 
-export function getTopProducersByRole(guildId: string, role: 'forger' | 'welder', limit: number = 10): Array<{ userId: string; produced: number }> {
+export async function getTopProducersByRole(guildId: string, role: 'forger' | 'welder', limit: number = 10): Promise<Array<{ userId: string; produced: number }>> {
   const column = role === 'forger' ? 'pipes_produced' : 'boxes_produced';
-  const stmt = db!.prepare(`
-    SELECT user_id as userId, ${column} as produced
-    FROM tier3_users
-    WHERE guild_id = ? AND role = ?
-    ORDER BY ${column} DESC
-    LIMIT ?
-  `);
-  return stmt.all(guildId, role, limit) as any[];
+  const rows = await qAll<any>(
+    `SELECT user_id as userId, ${column} as produced FROM tier3_users WHERE guild_id = ? AND role = ? ORDER BY ${column} DESC LIMIT ?`,
+    guildId, role, limit
+  );
+  return rows as any[];
 }
 
-// Full scan helpers for percent-based ranking
-export function getAllT3UsersProduction(guildId: string): Array<{ userId: string; role: 'forger' | 'welder' | null; pipesProduced: number; boxesProduced: number }> {
-  const rows = db!.prepare(`
-    SELECT user_id AS userId, role,
-           COALESCE(pipes_produced, 0) AS pipesProduced,
-           COALESCE(boxes_produced, 0) AS boxesProduced
-    FROM tier3_users
-    WHERE guild_id = ?
-  `).all(guildId) as any[];
+export async function getAllT3UsersProduction(guildId: string): Promise<Array<{ userId: string; role: 'forger' | 'welder' | null; pipesProduced: number; boxesProduced: number }>> {
+  const rows = await qAll<any>(
+    `SELECT user_id AS userId, role, COALESCE(pipes_produced, 0) AS pipesProduced, COALESCE(boxes_produced, 0) AS boxesProduced FROM tier3_users WHERE guild_id = ?`,
+    guildId
+  );
   return rows as any;
 }
 
-export function getAllT4UsersProduction(guildId: string): Array<{ userId: string; role: string | null; woodProduced: number; steelProduced: number; wheelsProduced: number; boilersProduced: number; cabinsProduced: number; trainsProduced: number }> {
-  const rows = db!.prepare(`
-    SELECT user_id AS userId, role,
+export async function getAllT4UsersProduction(guildId: string): Promise<Array<{ userId: string; role: string | null; woodProduced: number; steelProduced: number; wheelsProduced: number; boilersProduced: number; cabinsProduced: number; trainsProduced: number }>> {
+  const rows = await qAll<any>(
+    `SELECT user_id AS userId, role,
            COALESCE(wood_produced, 0) AS woodProduced,
            COALESCE(steel_produced, 0) AS steelProduced,
            COALESCE(wheels_produced, 0) AS wheelsProduced,
            COALESCE(boilers_produced, 0) AS boilersProduced,
            COALESCE(cabins_produced, 0) AS cabinsProduced,
            COALESCE(trains_produced, 0) AS trainsProduced
-    FROM tier4_users
-    WHERE guild_id = ?
-  `).all(guildId) as any[];
+     FROM tier4_users WHERE guild_id = ?`,
+    guildId
+  );
   return rows as any;
 }
 
-// List users in a guild by Tier 3 role
-export function getUsersByRoleT3(guildId: string, role: 'forger' | 'welder'): string[] {
-  const rows = db!.prepare(`SELECT user_id AS userId FROM tier3_users WHERE guild_id = ? AND role = ?`).all(guildId, role) as Array<{ userId: string }>;
+export async function getUsersByRoleT3(guildId: string, role: 'forger' | 'welder'): Promise<string[]> {
+  const rows = await qAll<{ userId: string }>(`SELECT user_id AS userId FROM tier3_users WHERE guild_id = ? AND role = ?`, guildId, role);
   return rows.map(r => r.userId);
 }
 
-// List users in a guild by Tier 4 role
-export function getUsersByRoleT4(
+export async function getUsersByRoleT4(
   guildId: string,
   role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'
-): string[] {
-  const rows = db!.prepare(`SELECT user_id AS userId FROM tier4_users WHERE guild_id = ? AND role = ?`).all(guildId, role) as Array<{ userId: string }>;
+): Promise<string[]> {
+  const rows = await qAll<{ userId: string }>(`SELECT user_id AS userId FROM tier4_users WHERE guild_id = ? AND role = ?`, guildId, role);
   return rows.map(r => r.userId);
 }
 
-// Totals for Tier 3 production by role across the guild
-export function getT3ProductionTotals(guildId: string): { forger: number; welder: number } {
-  const forgerRow = db!.prepare(`SELECT COALESCE(SUM(pipes_produced), 0) AS s FROM tier3_users WHERE guild_id = ? AND role = 'forger'`).get(guildId) as any;
-  const welderRow = db!.prepare(`SELECT COALESCE(SUM(boxes_produced), 0) AS s FROM tier3_users WHERE guild_id = ? AND role = 'welder'`).get(guildId) as any;
+export async function getT3ProductionTotals(guildId: string): Promise<{ forger: number; welder: number }> {
+  const forgerRow: any = await qOne(`SELECT COALESCE(SUM(pipes_produced), 0) AS s FROM tier3_users WHERE guild_id = ? AND role = 'forger'`, guildId);
+  const welderRow: any = await qOne(`SELECT COALESCE(SUM(boxes_produced), 0) AS s FROM tier3_users WHERE guild_id = ? AND role = 'welder'`, guildId);
   return { forger: (forgerRow?.s || 0), welder: (welderRow?.s || 0) };
 }
 
-// Totals for Tier 4 production by role across the guild
-export function getT4ProductionTotals(guildId: string): {
-  lumberjack: number; // wood
-  smithy: number;     // steel
-  wheelwright: number; // wheels
-  boilermaker: number; // boilers
-  coachbuilder: number; // cabins
-  mechanic: number;    // trains
-} {
-  const wood = db!.prepare(`SELECT COALESCE(SUM(wood_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'lumberjack'`).get(guildId) as any;
-  const steel = db!.prepare(`SELECT COALESCE(SUM(steel_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'smithy'`).get(guildId) as any;
-  const wheels = db!.prepare(`SELECT COALESCE(SUM(wheels_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'wheelwright'`).get(guildId) as any;
-  const boilers = db!.prepare(`SELECT COALESCE(SUM(boilers_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'boilermaker'`).get(guildId) as any;
-  const cabins = db!.prepare(`SELECT COALESCE(SUM(cabins_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'coachbuilder'`).get(guildId) as any;
-  const trains = db!.prepare(`SELECT COALESCE(SUM(trains_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'mechanic'`).get(guildId) as any;
-  return {
-    lumberjack: (wood?.s || 0),
-    smithy: (steel?.s || 0),
-    wheelwright: (wheels?.s || 0),
-    boilermaker: (boilers?.s || 0),
-    coachbuilder: (cabins?.s || 0),
-    mechanic: (trains?.s || 0)
-  };
+export async function getT4ProductionTotals(guildId: string): Promise<{
+  lumberjack: number;
+  smithy: number;
+  wheelwright: number;
+  boilermaker: number;
+  coachbuilder: number;
+  mechanic: number;
+}> {
+  const wood: any = await qOne(`SELECT COALESCE(SUM(wood_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'lumberjack'`, guildId);
+  const steel: any = await qOne(`SELECT COALESCE(SUM(steel_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'smithy'`, guildId);
+  const wheels: any = await qOne(`SELECT COALESCE(SUM(wheels_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'wheelwright'`, guildId);
+  const boilers: any = await qOne(`SELECT COALESCE(SUM(boilers_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'boilermaker'`, guildId);
+  const cabins: any = await qOne(`SELECT COALESCE(SUM(cabins_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'coachbuilder'`, guildId);
+  const trains: any = await qOne(`SELECT COALESCE(SUM(trains_produced), 0) AS s FROM tier4_users WHERE guild_id = ? AND role = 'mechanic'`, guildId);
+  return { lumberjack: wood?.s || 0, smithy: steel?.s || 0, wheelwright: wheels?.s || 0, boilermaker: boilers?.s || 0, coachbuilder: cabins?.s || 0, mechanic: trains?.s || 0 };
 }
 
-export function getUserContributionByTier(guildId: string, tier: number, userId: string): number {
+export async function getUserContributionByTier(guildId: string, tier: number, userId: string): Promise<number> {
   if (tier === 1) {
-    const row = db!.prepare(`SELECT contributed_t1 AS c FROM tier1_users WHERE guild_id = ? AND user_id = ?`).get(guildId, userId) as any;
+    const row: any = await qOne(`SELECT contributed_t1 AS c FROM tier1_users WHERE guild_id = ? AND user_id = ?`, guildId, userId);
     return row?.c ?? 0;
   } else if (tier === 2) {
-    const row = db!.prepare(`SELECT contributed_t2 AS c FROM tier2_users WHERE guild_id = ? AND user_id = ?`).get(guildId, userId) as any;
+    const row: any = await qOne(`SELECT contributed_t2 AS c FROM tier2_users WHERE guild_id = ? AND user_id = ?`, guildId, userId);
     return row?.c ?? 0;
   } else if (tier === 3) {
-    const row = db!.prepare(`SELECT contributed_t3 AS c FROM tier3_users WHERE guild_id = ? AND user_id = ?`).get(guildId, userId) as any;
+    const row: any = await qOne(`SELECT contributed_t3 AS c FROM tier3_users WHERE guild_id = ? AND user_id = ?`, guildId, userId);
     return row?.c ?? 0;
   } else {
-    const row = db!.prepare(`SELECT contributed_t4 AS c FROM tier4_users WHERE guild_id = ? AND user_id = ?`).get(guildId, userId) as any;
+    const row: any = await qOne(`SELECT contributed_t4 AS c FROM tier4_users WHERE guild_id = ? AND user_id = ?`, guildId, userId);
     return row?.c ?? 0;
   }
 }
 
-export function getUserRankByTier(guildId: string, tier: number, userId: string): { rank: number; contributed: number } {
-  const contrib = getUserContributionByTier(guildId, tier, userId);
+export async function getUserRankByTier(guildId: string, tier: number, userId: string): Promise<{ rank: number; contributed: number }> {
+  const contrib = await getUserContributionByTier(guildId, tier, userId);
   let rank = 1;
   if (tier === 1) {
-    const row = db!.prepare(`SELECT COUNT(1) AS higher FROM tier1_users WHERE guild_id = ? AND contributed_t1 > ?`).get(guildId, contrib) as any;
+    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier1_users WHERE guild_id = ? AND contributed_t1 > ?`, guildId, contrib);
     rank = 1 + (row?.higher ?? 0);
   } else if (tier === 2) {
-    const row = db!.prepare(`SELECT COUNT(1) AS higher FROM tier2_users WHERE guild_id = ? AND contributed_t2 > ?`).get(guildId, contrib) as any;
+    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier2_users WHERE guild_id = ? AND contributed_t2 > ?`, guildId, contrib);
     rank = 1 + (row?.higher ?? 0);
   } else if (tier === 3) {
-    const row = db!.prepare(`SELECT COUNT(1) AS higher FROM tier3_users WHERE guild_id = ? AND contributed_t3 > ?`).get(guildId, contrib) as any;
+    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier3_users WHERE guild_id = ? AND contributed_t3 > ?`, guildId, contrib);
     rank = 1 + (row?.higher ?? 0);
   } else {
-    const row = db!.prepare(`SELECT COUNT(1) AS higher FROM tier4_users WHERE guild_id = ? AND contributed_t4 > ?`).get(guildId, contrib) as any;
+    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier4_users WHERE guild_id = ? AND contributed_t4 > ?`, guildId, contrib);
     rank = 1 + (row?.higher ?? 0);
   }
   return { rank, contributed: contrib };
 }
 
-export function initState(): void {
-  initDb();
+export async function initState(): Promise<void> {
+  await initDb();
 }
 
-// Compute MVP (most valuable player) for a guild across all 4 tiers and award +1 MVP to that user.
-// Fairness rule: winner is the user with the highest share of total contributions across all tiers,
-// i.e., argmax_u (sum_t contrib_t[u]) / (sum_t total_t). Ties broken by higher Tier 4 contrib, then Tier 3, Tier 2, Tier 1.
-export function computeAndAwardMvp(guildId: string): string | null {
-  const fn = db!.transaction((gid: string) => {
-    // Load totals per tier
-    const t1total = (db!.prepare(`SELECT COALESCE(SUM(contributed_t1),0) AS s FROM tier1_users WHERE guild_id = ?`).get(gid) as any).s as number;
-    const t2total = (db!.prepare(`SELECT COALESCE(SUM(contributed_t2),0) AS s FROM tier2_users WHERE guild_id = ?`).get(gid) as any).s as number;
-    const t3total = (db!.prepare(`SELECT COALESCE(SUM(contributed_t3),0) AS s FROM tier3_users WHERE guild_id = ?`).get(gid) as any).s as number;
-    const t4total = (db!.prepare(`SELECT COALESCE(SUM(contributed_t4),0) AS s FROM tier4_users WHERE guild_id = ?`).get(gid) as any).s as number;
-    const grandTotal = t1total + t2total + t3total + t4total;
-    if (grandTotal <= 0) return null as string | null;
-
-    // Load per-user contributions per tier (one scan each)
-    const t1 = db!.prepare(`SELECT user_id, contributed_t1 AS c FROM tier1_users WHERE guild_id = ?`).all(gid) as Array<{ user_id: string; c: number }>;
-    const t2 = db!.prepare(`SELECT user_id, contributed_t2 AS c FROM tier2_users WHERE guild_id = ?`).all(gid) as Array<{ user_id: string; c: number }>;
-    const t3 = db!.prepare(`SELECT user_id, contributed_t3 AS c FROM tier3_users WHERE guild_id = ?`).all(gid) as Array<{ user_id: string; c: number }>;
-    const t4 = db!.prepare(`SELECT user_id, contributed_t4 AS c FROM tier4_users WHERE guild_id = ?`).all(gid) as Array<{ user_id: string; c: number }>;
-    const m1 = new Map(t1.map(r => [r.user_id, r.c || 0]));
-    const m2 = new Map(t2.map(r => [r.user_id, r.c || 0]));
-    const m3 = new Map(t3.map(r => [r.user_id, r.c || 0]));
-    const m4 = new Map(t4.map(r => [r.user_id, r.c || 0]));
-
-    // Union of all users from users table
-    const users = db!.prepare(`SELECT user_id FROM users WHERE guild_id = ?`).all(gid) as Array<{ user_id: string }>;
-    let bestId: string | null = null;
-    let bestShare = -1;
-    let tieBreak: [number, number, number, number] = [0,0,0,0];
-    for (const u of users) {
-      const c1 = m1.get(u.user_id) || 0;
-      const c2 = m2.get(u.user_id) || 0;
-      const c3 = m3.get(u.user_id) || 0;
-      const c4 = m4.get(u.user_id) || 0;
-      const sum = c1 + c2 + c3 + c4;
-      if (sum <= 0) continue;
-      const share = sum / grandTotal;
-      const tb: [number, number, number, number] = [c4, c3, c2, c1];
-      const better = share > bestShare || (Math.abs(share - bestShare) < 1e-12 && (tb[0] > tieBreak[0] || (tb[0] === tieBreak[0] && (tb[1] > tieBreak[1] || (tb[1] === tieBreak[1] && (tb[2] > tieBreak[2] || (tb[2] === tieBreak[2] && tb[3] > tieBreak[3])))))));
-      if (better) {
-        bestShare = share;
-        bestId = u.user_id;
-        tieBreak = tb;
-      }
-    }
-    if (bestId) {
-      db!.prepare(`UPDATE users SET prestige_mvp_awards = COALESCE(prestige_mvp_awards,0) + 1 WHERE guild_id = ? AND user_id = ?`).run(gid, bestId);
-    }
-    return bestId as string | null;
-  });
+export async function computeAndAwardMvp(guildId: string): Promise<string | null> {
   try {
-    return fn(guildId);
+    return await transaction(async client => {
+      const t1total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t1),0) AS s FROM tier1_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
+      const t2total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t2),0) AS s FROM tier2_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
+      const t3total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t3),0) AS s FROM tier3_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
+      const t4total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t4),0) AS s FROM tier4_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
+      const grandTotal = t1total + t2total + t3total + t4total;
+      if (grandTotal <= 0) return null;
+
+      const t1 = await qAllTx(client, `SELECT user_id, contributed_t1 AS c FROM tier1_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
+      const t2 = await qAllTx(client, `SELECT user_id, contributed_t2 AS c FROM tier2_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
+      const t3 = await qAllTx(client, `SELECT user_id, contributed_t3 AS c FROM tier3_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
+      const t4 = await qAllTx(client, `SELECT user_id, contributed_t4 AS c FROM tier4_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
+      const m1 = new Map(t1.map(r => [r.user_id, r.c || 0]));
+      const m2 = new Map(t2.map(r => [r.user_id, r.c || 0]));
+      const m3 = new Map(t3.map(r => [r.user_id, r.c || 0]));
+      const m4 = new Map(t4.map(r => [r.user_id, r.c || 0]));
+
+      const users = await qAllTx(client, `SELECT user_id FROM users WHERE guild_id = ?`, guildId) as Array<{ user_id: string }>;
+      let bestId: string | null = null;
+      let bestShare = -1;
+      let tieBreak: [number, number, number, number] = [0,0,0,0];
+      for (const u of users) {
+        const c1 = m1.get(u.user_id) || 0;
+        const c2 = m2.get(u.user_id) || 0;
+        const c3 = m3.get(u.user_id) || 0;
+        const c4 = m4.get(u.user_id) || 0;
+        const sum = c1 + c2 + c3 + c4;
+        if (sum <= 0) continue;
+        const share = sum / grandTotal;
+        const tb: [number, number, number, number] = [c4, c3, c2, c1];
+        const better = share > bestShare || (Math.abs(share - bestShare) < 1e-12 && (tb[0] > tieBreak[0] || (tb[0] === tieBreak[0] && (tb[1] > tieBreak[1] || (tb[1] === tieBreak[1] && (tb[2] > tieBreak[2] || (tb[2] === tieBreak[2] && tb[3] > tieBreak[3])))))));
+        if (better) {
+          bestShare = share;
+          bestId = u.user_id;
+          tieBreak = tb;
+        }
+      }
+      if (bestId) {
+        await qRunTx(client, `UPDATE users SET prestige_mvp_awards = COALESCE(prestige_mvp_awards,0) + 1 WHERE guild_id = ? AND user_id = ?`, guildId, bestId);
+      }
+      return bestId;
+    });
   } catch (e) {
     console.error('computeAndAwardMvp failed:', e);
     return null;
   }
 }
 
-// Return all guild IDs known to the database
-export function getAllGuildIds(): string[] {
-  const rows = db!.prepare('SELECT id FROM guilds').all() as Array<{ id: string }>;
+export async function getAllGuildIds(): Promise<string[]> {
+  const rows = await qAll<{ id: string }>('SELECT id FROM guilds');
   return rows.map(r => r.id);
 }
 
-// Mass-disable passive welding for all welders in a guild.
-// Returns number of users affected.
-export function disableAllWeldersPassive(guildId: string): number {
-  const fn = db!.transaction((gid: string) => {
-    const stmt = db!.prepare(`
-      UPDATE tier3_users
-      SET weld_enabled = 0
-      WHERE guild_id = ? AND role = 'welder' AND weld_enabled != 0
-    `);
-    const info = stmt.run(gid);
-    return (info?.changes || 0) as number;
+export async function disableAllWeldersPassive(guildId: string): Promise<number> {
+  return transaction(async client => {
+    const info = await qRunTx(client, `UPDATE tier3_users SET weld_enabled = 0 WHERE guild_id = ? AND role = 'welder' AND weld_enabled != 0`, guildId);
+    return info.changes || 0;
   });
-  return fn(guildId);
 }
 
-// Mass-disable Tier 4 consumers based on the actor role
-export function disableT4ConsumersByRole(
+export async function disableT4ConsumersByRole(
   guildId: string,
   actor: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'
-): number {
-  const fn = db!.transaction((gid: string, r: string) => {
+): Promise<number> {
+  return transaction(async client => {
     let changes = 0;
-    if (r === 'lumberjack') {
-      changes += db!.prepare(`UPDATE tier4_users SET wheel_enabled = 0 WHERE guild_id = ? AND role = 'wheelwright' AND wheel_enabled != 0`).run(gid).changes || 0;
-      changes += db!.prepare(`UPDATE tier4_users SET coach_enabled = 0 WHERE guild_id = ? AND role = 'coachbuilder' AND coach_enabled != 0`).run(gid).changes || 0;
-    } else if (r === 'smithy') {
-      changes += db!.prepare(`UPDATE tier4_users SET wheel_enabled = 0 WHERE guild_id = ? AND role = 'wheelwright' AND wheel_enabled != 0`).run(gid).changes || 0;
-      changes += db!.prepare(`UPDATE tier4_users SET boiler_enabled = 0 WHERE guild_id = ? AND role = 'boilermaker' AND boiler_enabled != 0`).run(gid).changes || 0;
-    } else if (r === 'wheelwright' || r === 'boilermaker' || r === 'coachbuilder') {
-      changes += db!.prepare(`UPDATE tier4_users SET mech_enabled = 0 WHERE guild_id = ? AND role = 'mechanic' AND mech_enabled != 0`).run(gid).changes || 0;
+    if (actor === 'lumberjack') {
+      changes += (await qRunTx(client, `UPDATE tier4_users SET wheel_enabled = 0 WHERE guild_id = ? AND role = 'wheelwright' AND wheel_enabled != 0`, guildId)).changes;
+      changes += (await qRunTx(client, `UPDATE tier4_users SET coach_enabled = 0 WHERE guild_id = ? AND role = 'coachbuilder' AND coach_enabled != 0`, guildId)).changes;
+    } else if (actor === 'smithy') {
+      changes += (await qRunTx(client, `UPDATE tier4_users SET wheel_enabled = 0 WHERE guild_id = ? AND role = 'wheelwright' AND wheel_enabled != 0`, guildId)).changes;
+      changes += (await qRunTx(client, `UPDATE tier4_users SET boiler_enabled = 0 WHERE guild_id = ? AND role = 'boilermaker' AND boiler_enabled != 0`, guildId)).changes;
+    } else if (actor === 'wheelwright' || actor === 'boilermaker' || actor === 'coachbuilder') {
+      changes += (await qRunTx(client, `UPDATE tier4_users SET mech_enabled = 0 WHERE guild_id = ? AND role = 'mechanic' AND mech_enabled != 0`, guildId)).changes;
     }
     return changes;
   });
-  return fn(guildId, actor);
 }
 
-// Periodic background refresh across all guilds.
-// Efficiently applies passive production since each user's last_tick.
-export function refreshAllGuilds(now: number = Date.now()): { guildsProcessed: number; usersRefreshed: number; totalGained: number } {
-  const guildIds = getAllGuildIds();
+export async function refreshAllGuilds(now: number = Date.now()): Promise<{ guildsProcessed: number; usersRefreshed: number; totalGained: number }> {
+  const guildIds = await getAllGuildIds();
   let usersRefreshed = 0;
   let totalGained = 0;
   for (const gid of guildIds) {
-    const r = refreshGuildContributions(gid, undefined, now);
+    const r = await refreshGuildContributions(gid, undefined, now);
     usersRefreshed += r.usersRefreshed;
     totalGained += r.totalGained;
   }
   return { guildsProcessed: guildIds.length, usersRefreshed, totalGained };
 }
 
-// Refresh passive gains and contribution counters for all users in a guild.
-// Optionally exclude a specific user (e.g., the clicking user already ticked).
-export function refreshGuildContributions(guildId: string, excludeUserId?: string, now: number = Date.now()): { usersRefreshed: number; totalGained: number } {
-  const result = db!.transaction((gid: string, exclude: string | undefined, ts: number) => {
-    const guild = loadGuild(gid);
+export async function refreshGuildContributions(guildId: string, excludeUserId?: string, now: number = Date.now()): Promise<{ usersRefreshed: number; totalGained: number }> {
+  return transaction(async client => {
+    const guild = await loadGuildTx(client, guildId);
     const tier = guild.widgetTier || 1;
-    const rows = db!.prepare('SELECT user_id FROM users WHERE guild_id = ?').all(gid) as Array<{ user_id: string }>;
+    const rows = await qAllTx(client, 'SELECT user_id FROM users WHERE guild_id = ?', guildId) as Array<{ user_id: string }>;
     let refreshed = 0;
     let total = 0;
 
     if (tier === 3) {
-      // Fair, ingredient-constrained Tier 3 distribution
       const users: Array<{ id: string; user: User; delta: { pipes: number; boxesPotential: number } }> = [];
       for (const r of rows) {
         const uid = r.user_id;
-        if (exclude && uid === exclude) continue;
-        const u = loadUser(gid, uid);
-        const delta = applyPassiveTicksT3(guild, u, ts);
+        if (excludeUserId && uid === excludeUserId) continue;
+        const u = await loadUserTx(client, guildId, uid);
+        const delta = applyPassiveTicksT3(guild, u, now);
         users.push({ id: uid, user: u, delta: { pipes: Math.max(0, delta.pipes || 0), boxesPotential: Math.max(0, delta.boxesPotential || 0) } });
       }
-      // 1) Apply forging (adds to shared pipe inventory) and credit forgers
       for (const rec of users) {
         const { user: u, delta } = rec;
         if (((u as any).role3 || null) === 'forger' && delta.pipes > 0) {
-          // Apply forging
           (guild as any).inventory = (guild as any).inventory || { pipes: 0, boxes: 0 };
           (guild as any).inventory.pipes = ((guild as any).inventory.pipes || 0) + delta.pipes;
           (guild.totals as any).pipes = ((guild.totals as any).pipes || 0) + delta.pipes;
@@ -1020,7 +798,6 @@ export function refreshGuildContributions(guildId: string, excludeUserId?: strin
           (u as any).pipesProduced = ((u as any).pipesProduced || 0) + delta.pipes;
         }
       }
-      // 2) Compute welder demand and fair allocation under pipe constraints
       let totalBoxesPotential = 0;
       for (const rec of users) {
         const { user: u, delta } = rec;
@@ -1044,35 +821,31 @@ export function refreshGuildContributions(guildId: string, excludeUserId?: strin
         sumBoxesMade += boxesMade;
         sumPipesConsumed += consumed;
       }
-      // Apply shared inventory effects once
       if (sumBoxesMade > 0) {
         inv.pipes = (inv.pipes || 0) - sumPipesConsumed;
         inv.boxes = (inv.boxes || 0) + sumBoxesMade;
         (guild.totals as any).boxes = ((guild.totals as any).boxes || 0) + sumBoxesMade;
         total += sumBoxesMade;
       }
-      // Recompute progress for Tier 3 from shared boxes inventory
+      for (const rec of users) {
+        await saveUserTx(client, guildId, rec.id, rec.user);
+        refreshed++;
+      }
       if ((guild as any).widgetTier === 3) {
         const invBoxes = inv.boxes || 0;
         guild.tierProgress = Math.min(guild.tierGoal, invBoxes);
       }
-      // Persist all users once
-      for (const rec of users) {
-        saveUser(gid, rec.id, rec.user);
-        refreshed++;
-      }
     } else {
-      // Tiers 1,2,4 original flow per user
       for (const r of rows) {
         const uid = r.user_id;
-        if (exclude && uid === exclude) continue;
-        const u = loadUser(gid, uid);
+        if (excludeUserId && uid === excludeUserId) continue;
+        const u = await loadUserTx(client, guildId, uid);
         if (tier === 4) {
-          const delta4 = applyPassiveTicksT4(guild, u, ts);
+          const delta4 = applyPassiveTicksT4(guild, u, now);
           const res4 = applyTier4GuildFlows(guild, u, delta4);
           total += (res4.trainsMade || 0);
         } else {
-          const gained = applyPassiveTicks(u, tier, ts);
+          const gained = applyPassiveTicks(u, tier, now);
           if (gained > 0) {
             applyGuildProgress(guild, gained, tier);
             if (tier === 1) {
@@ -1085,21 +858,18 @@ export function refreshGuildContributions(guildId: string, excludeUserId?: strin
             total += gained;
           }
         }
-        saveUser(gid, uid, u);
+        await saveUserTx(client, guildId, uid, u);
         refreshed++;
       }
     }
-    saveGuild(guild);
+    await saveGuildTx(client, guild);
     return { usersRefreshed: refreshed, totalGained: total };
   });
-  return result(guildId, excludeUserId, now);
 }
 
-// Initialize Tier 2 fields for all users in a guild right after promotion.
-// Does not touch Tier 1 fields. Safe to run multiple times.
-export function initializeTier2ForGuild(guildId: string): void {
-  const fn = db!.transaction((gid: string) => {
-    db!.prepare(`
+export async function initializeTier2ForGuild(guildId: string): Promise<void> {
+  await transaction(async client => {
+    await qRunTx(client, `
       UPDATE tier2_users SET
         beams = 0,
         contributed_t2 = 0,
@@ -1114,234 +884,59 @@ export function initializeTier2ForGuild(guildId: string): void {
       WHERE guild_id = ?
         AND beams = 0
         AND contributed_t2 = 0
-    `).run(gid);
+    `, guildId);
   });
-  fn(guildId);
 }
 
-// Minimal diagnostic snapshot if needed later (omitted for lean build)
-export function getState(): { guildCount: number; userCount: number } {
-  const guildCount = (db!.prepare('SELECT COUNT(*) AS c FROM guilds').get() as any).c as number;
-  const userCount = (db!.prepare('SELECT COUNT(*) AS c FROM users').get() as any).c as number;
+export async function getState(): Promise<{ guildCount: number; userCount: number }> {
+  const guildCount = (await qOne<any>('SELECT COUNT(*) AS c FROM guilds'))?.c as number || 0;
+  const userCount = (await qOne<any>('SELECT COUNT(*) AS c FROM users'))?.c as number || 0;
   return { guildCount, userCount };
 }
 
-export function withGuildAndUser<T>(guildId: string, userId: string, mutator: (guild: GuildState, user: User) => T): T {
-  const fn = db!.transaction((gid: string, uid: string) => {
-    const guild = loadGuild(gid);
-    const user = loadUser(gid, uid);
+export async function withGuildAndUser<T>(guildId: string, userId: string, mutator: (guild: GuildState, user: User) => T): Promise<T> {
+  return transaction(async client => {
+    const guild = await loadGuildTx(client, guildId);
+    const user = await loadUserTx(client, guildId, userId);
     const res = mutator(guild, user);
-    saveGuild(guild);
-    saveUser(gid, uid, user);
+    await saveGuildTx(client, guild);
+    await saveUserTx(client, guildId, userId, user);
     return res;
   });
-  return fn(guildId, userId);
 }
 
-// Reset all users in a guild to default state for prestige
-export function resetAllUsersForPrestige(guildId: string): void {
-  const fn = db!.transaction((gid: string) => {
-    try {
-      // Reset base user data
-      db!.prepare(`UPDATE users SET last_tick = ?, last_chop_at = 0, lifetime_contributed = 0 WHERE guild_id = ?`)
-        .run(Date.now(), gid);
-      
-      // Reset tier 1 users
-      db!.prepare(`UPDATE tier1_users SET 
-        sticks = 0, axe_level = 0, click_power = 1, 
-        lumberjacks = 0, foremen = 0, logging_camps = 0, sawmills = 0, arcane_grove = 0, 
-        rate_sticks_per_sec = 0, contributed_t1 = 0 
-        WHERE guild_id = ?`).run(gid);
-      
-      // Reset tier 2 users
-      db!.prepare(`UPDATE tier2_users SET 
-        beams = 0, pickaxe_level = 0, pick_click_power = 1,
-        miners = 0, smelters = 0, foundries = 0, beam_mills = 0, arcane_forge = 0,
-        rate_beams_per_sec = 0, contributed_t2 = 0
-        WHERE guild_id = ?`).run(gid);
-      
-      // Reset tier 3 users
-      db!.prepare(`UPDATE tier3_users SET 
-        role = NULL,
-        f1 = 0, f2 = 0, f3 = 0, f4 = 0, f5 = 0,
-        w1 = 0, w2 = 0, w3 = 0, w4 = 0, w5 = 0,
-        rate_pipes_per_sec = 0, rate_boxes_per_sec = 0, contributed_t3 = 0,
-        weld_enabled = 1, pipes_produced = 0, boxes_produced = 0
-        WHERE guild_id = ?`).run(gid);
-      
-      // Reset tier 4 users
-      db!.prepare(`UPDATE tier4_users SET 
-        role = NULL,
-        wh1 = 0, wh2 = 0, wh3 = 0, wh4 = 0, wh5 = 0,
-        bl1 = 0, bl2 = 0, bl3 = 0, bl4 = 0, bl5 = 0,
-        cb1 = 0, cb2 = 0, cb3 = 0, cb4 = 0, cb5 = 0,
-        rate_wheels_per_sec = 0, rate_boilers_per_sec = 0, rate_cabins_per_sec = 0,
-        contributed_t4 = 0, wheels_produced = 0, boilers_produced = 0, cabins_produced = 0
-        WHERE guild_id = ?`).run(gid);
-      
-      console.log(`Successfully reset all users for guild ${gid} prestige`);
-    } catch (error) {
-      console.error(`Failed to reset users for guild ${gid} prestige:`, error);
-      throw error; // Will trigger transaction rollback
-    }
+export async function resetAllUsersForPrestige(guildId: string): Promise<void> {
+  await transaction(async client => {
+    await qRunTx(client, `UPDATE users SET last_tick = ?, last_chop_at = 0, lifetime_contributed = 0 WHERE guild_id = ?`, Date.now(), guildId);
+    await qRunTx(client, `UPDATE tier1_users SET 
+      sticks = 0, axe_level = 0, click_power = 1, 
+      lumberjacks = 0, foremen = 0, logging_camps = 0, sawmills = 0, arcane_grove = 0, 
+      rate_sticks_per_sec = 0, contributed_t1 = 0 
+      WHERE guild_id = ?`, guildId);
+    await qRunTx(client, `UPDATE tier2_users SET 
+      beams = 0, pickaxe_level = 0, pick_click_power = 1,
+      miners = 0, smelters = 0, foundries = 0, beam_mills = 0, arcane_forge = 0,
+      rate_beams_per_sec = 0, contributed_t2 = 0
+      WHERE guild_id = ?`, guildId);
+    await qRunTx(client, `UPDATE tier3_users SET 
+      role = NULL,
+      f1 = 0, f2 = 0, f3 = 0, f4 = 0, f5 = 0,
+      w1 = 0, w2 = 0, w3 = 0, w4 = 0, w5 = 0,
+      rate_pipes_per_sec = 0, rate_boxes_per_sec = 0, contributed_t3 = 0,
+      weld_enabled = 1, pipes_produced = 0, boxes_produced = 0
+      WHERE guild_id = ?`, guildId);
+    await qRunTx(client, `UPDATE tier4_users SET 
+      role = NULL,
+      wh1 = 0, wh2 = 0, wh3 = 0, wh4 = 0, wh5 = 0,
+      bl1 = 0, bl2 = 0, bl3 = 0, bl4 = 0, bl5 = 0,
+      cb1 = 0, cb2 = 0, cb3 = 0, cb4 = 0, cb5 = 0,
+      rate_wheels_per_sec = 0, rate_boilers_per_sec = 0, rate_cabins_per_sec = 0,
+      contributed_t4 = 0, wheels_produced = 0, boilers_produced = 0, cabins_produced = 0
+      WHERE guild_id = ?`, guildId);
   });
-  
-  try {
-    fn(guildId);
-  } catch (error) {
-    console.error(`Transaction failed for prestige reset in guild ${guildId}:`, error);
-    throw new Error(`Prestige reset failed for guild ${guildId}. Database may be in inconsistent state.`);
-  }
-}
-
-// Batch load user data to fix N+1 query problems
-export function loadUsersWithRoleData(guildId: string, userIds: string[], tier: number): Map<string, { user: User; role?: string; produced?: number }> {
-  const userMap = new Map<string, { user: User; role?: string; produced?: number }>();
-  
-  if (userIds.length === 0) return userMap;
-  
-  const fn = db!.transaction((gid: string, uids: string[], t: number) => {
-    const placeholders = uids.map(() => '?').join(',');
-    
-    // Batch load base user data
-    const baseUsers = db!.prepare(`
-      SELECT user_id, last_tick, last_chop_at, lifetime_contributed, prestige_mvp_awards
-      FROM users WHERE guild_id = ? AND user_id IN (${placeholders})
-    `).all(gid, ...uids) as any[];
-    
-    const baseMap = new Map(baseUsers.map(u => [u.user_id, u]));
-    
-    // Batch load tier-specific data
-    let tierUsers: any[] = [];
-    if (t === 1) {
-      tierUsers = db!.prepare(`
-        SELECT user_id, sticks, axe_level, click_power, lumberjacks, foremen, logging_camps, sawmills, arcane_grove, rate_sticks_per_sec, contributed_t1
-        FROM tier1_users WHERE guild_id = ? AND user_id IN (${placeholders})
-      `).all(gid, ...uids) as any[];
-    } else if (t === 2) {
-      tierUsers = db!.prepare(`
-        SELECT user_id, beams, pickaxe_level, pick_click_power, miners, smelters, foundries, beam_mills, arcane_forge, rate_beams_per_sec, contributed_t2
-        FROM tier2_users WHERE guild_id = ? AND user_id IN (${placeholders})
-      `).all(gid, ...uids) as any[];
-    } else if (t === 3) {
-      tierUsers = db!.prepare(`
-        SELECT user_id, role, f1, f2, f3, f4, f5, w1, w2, w3, w4, w5, rate_pipes_per_sec, rate_boxes_per_sec, contributed_t3, weld_enabled, pipes_produced, boxes_produced
-        FROM tier3_users WHERE guild_id = ? AND user_id IN (${placeholders})
-      `).all(gid, ...uids) as any[];
-    } else if (t === 4) {
-      tierUsers = db!.prepare(`
-        SELECT user_id, role,
-               wh1, wh2, wh3, wh4, wh5,
-               bl1, bl2, bl3, bl4, bl5,
-               cb1, cb2, cb3, cb4, cb5,
-               lj1, lj2, lj3, lj4, lj5,
-               sm1, sm2, sm3, sm4, sm5,
-               ta1, ta2, ta3, ta4, ta5,
-               rate_wheels_per_sec, rate_boilers_per_sec, rate_cabins_per_sec,
-               rate_wood_per_sec, rate_steel_per_sec, rate_trains_per_sec,
-               contributed_t4,
-               wheels_produced, boilers_produced, cabins_produced,
-               wood_produced, steel_produced, trains_produced,
-               wheel_enabled, boiler_enabled, coach_enabled, mech_enabled
-        FROM tier4_users WHERE guild_id = ? AND user_id IN (${placeholders})
-      `).all(gid, ...uids) as any[];
-    }
-    
-    const tierMap = new Map(tierUsers.map(u => [u.user_id, u]));
-    
-    // Construct full user objects
-    for (const uid of uids) {
-      const base = baseMap.get(uid);
-      const tier = tierMap.get(uid);
-      if (base && tier) {
-        const user = constructUserFromRowData(base, tier, t);
-        const role = tier.role || undefined;
-        const produced = t === 3 ? (role === 'forger' ? tier.pipes_produced : tier.boxes_produced) || 0 : 0;
-        userMap.set(uid, { user, role, produced });
-      }
-    }
-    
-    return userMap;
-  });
-  
-  return fn(guildId, userIds, tier);
-}
-
-function constructUserFromRowData(base: any, tier: any, tierNum: number): User {
-  const user: User = {
-    sticks: tier.sticks || 0,
-    lastTick: base.last_tick || Date.now(),
-    lastChopAt: base.last_chop_at || 0,
-    beams: tier.beams || 0,
-    lifetimeContributed: base.lifetime_contributed || 0,
-    prestigeMvpAwards: base.prestige_mvp_awards || 0,
-    contributedT1: tier.contributed_t1 || 0,
-    contributedT2: tier.contributed_t2 || 0,
-    contributedT3: tier.contributed_t3 || 0,
-    axeLevel: tier.axe_level || 0,
-    clickPower: tier.click_power || 1,
-    pickaxeLevel: tier.pickaxe_level || 0,
-    pickClickPower: tier.pick_click_power || 1,
-    automation: {
-      lumberjacks: tier.lumberjacks || 0,
-      foremen: tier.foremen || 0,
-      loggingCamps: tier.logging_camps || 0,
-      sawmills: tier.sawmills || 0,
-      arcaneGrove: tier.arcane_grove || 0
-    },
-    automation2: {
-      miners: tier.miners || 0,
-      smelters: tier.smelters || 0,
-      foundries: tier.foundries || 0,
-      beamMills: tier.beam_mills || 0,
-      arcaneForge: tier.arcane_forge || 0
-    },
-    automation3: { 
-      forge1: tier.f1 || 0, forge2: tier.f2 || 0, forge3: tier.f3 || 0, forge4: tier.f4 || 0, forge5: tier.f5 || 0, 
-      weld1: tier.w1 || 0, weld2: tier.w2 || 0, weld3: tier.w3 || 0, weld4: tier.w4 || 0, weld5: tier.w5 || 0 
-    },
-    role3: tier.role || null,
-    rates: { 
-      sticksPerSec: tier.rate_sticks_per_sec || 0, 
-      beamsPerSec: tier.rate_beams_per_sec || 0, 
-      pipesPerSec: tier.rate_pipes_per_sec || 0, 
-      boxesPerSec: tier.rate_boxes_per_sec || 0, 
-      wheelsPerSec: tier.rate_wheels_per_sec || 0, 
-      boilersPerSec: tier.rate_boilers_per_sec || 0, 
-      cabinsPerSec: tier.rate_cabins_per_sec || 0,
-      woodPerSec: tier.rate_wood_per_sec || 0,
-      steelPerSec: tier.rate_steel_per_sec || 0,
-      trainsPerSec: tier.rate_trains_per_sec || 0 
-    },
-    weldPassiveEnabled: (tier.weld_enabled ?? 1) !== 0,
-    pipesProduced: tier.pipes_produced || 0,
-    boxesProduced: tier.boxes_produced || 0,
-    // Tier 4
-    role4: tier.role || null,
-    automation4: { 
-      wh1: tier.wh1 || 0, wh2: tier.wh2 || 0, wh3: tier.wh3 || 0, wh4: tier.wh4 || 0, wh5: tier.wh5 || 0, 
-      bl1: tier.bl1 || 0, bl2: tier.bl2 || 0, bl3: tier.bl3 || 0, bl4: tier.bl4 || 0, bl5: tier.bl5 || 0, 
-      cb1: tier.cb1 || 0, cb2: tier.cb2 || 0, cb3: tier.cb3 || 0, cb4: tier.cb4 || 0, cb5: tier.cb5 || 0,
-      lj1: tier.lj1 || 0, lj2: tier.lj2 || 0, lj3: tier.lj3 || 0, lj4: tier.lj4 || 0, lj5: tier.lj5 || 0,
-      sm1: tier.sm1 || 0, sm2: tier.sm2 || 0, sm3: tier.sm3 || 0, sm4: tier.sm4 || 0, sm5: tier.sm5 || 0,
-      ta1: tier.ta1 || 0, ta2: tier.ta2 || 0, ta3: tier.ta3 || 0, ta4: tier.ta4 || 0, ta5: tier.ta5 || 0 
-    },
-    contributedT4: tier.contributed_t4 || 0,
-    wheelsProduced: tier.wheels_produced || 0,
-    boilersProduced: tier.boilers_produced || 0,
-    cabinsProduced: tier.cabins_produced || 0,
-    woodProduced: tier.wood_produced || 0,
-    steelProduced: tier.steel_produced || 0,
-    trainsProduced: tier.trains_produced || 0,
-    wheelPassiveEnabled: (tier.wheel_enabled ?? 1) !== 0,
-    boilerPassiveEnabled: (tier.boiler_enabled ?? 1) !== 0,
-    coachPassiveEnabled: (tier.coach_enabled ?? 1) !== 0,
-    mechPassiveEnabled: (tier.mech_enabled ?? 1) !== 0
-  };
-  
-  return user;
 }
 
 export function saveNow(): void {
-  // No-op: SQLite writes are immediate within transaction
+  // No-op for Postgres (writes committed in transactions)
 }
+
