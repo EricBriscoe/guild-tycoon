@@ -76,7 +76,7 @@ export function renderTycoon(guild: Guild, user: User) {
     const nextChopLine = chopReady ? 'Next Action: Ready now' : `Next Action: <t:${readyAtSec}:R> • <t:${readyAtSec}:T>`;
 
     const header = new TextDisplayBuilder()
-      .setContent('# Guild Tycoon — Tier 4: Trains\n\nHarvest, forge, craft parts, and assemble trains.');
+      .setContent('# 🎮 Guild Tycoon — Tier 4: Trains 🚂\n\nHarvest, forge, craft parts, and assemble trains.');
 
     if (!role) {
       const chooseHeader = new TextDisplayBuilder().setContent('## Choose Your Role');
@@ -112,9 +112,41 @@ export function renderTycoon(guild: Guild, user: User) {
     const rateForRole = (r: string) => (r === 'lumberjack' ? (user as any).rates?.woodPerSec : r === 'smithy' ? (user as any).rates?.steelPerSec : r === 'wheelwright' ? (user as any).rates?.wheelsPerSec : r === 'boilermaker' ? (user as any).rates?.boilersPerSec : r === 'coachbuilder' ? (user as any).rates?.cabinsPerSec : (user as any).rates?.trainsPerSec) || 0;
     const roleActionLabel = (r: string) => r === 'lumberjack' ? 'Chop' : r === 'smithy' ? 'Forge' : r === 'wheelwright' ? 'Craft' : r === 'boilermaker' ? 'Build' : r === 'coachbuilder' ? 'Carve' : 'Assemble';
     const unitLabel = (r: string) => r === 'lumberjack' ? 'wood' : r === 'smithy' ? 'steel' : r === 'wheelwright' ? 'wheels' : r === 'boilermaker' ? 'boilers' : r === 'coachbuilder' ? 'cabins' : 'trains';
+    let productionToggle: any = null;
+    let resourceControl: any = null;
     const playerRole = new SectionBuilder()
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## You\nRole: ${role} • Rate: ${rateFmt(rateForRole(role))}/s\n${nextChopLine}`))
       .setButtonAccessory(new ButtonBuilder().setCustomId('tycoon:chop').setStyle(chopReady ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(!chopReady).setLabel(chopReady ? `${roleActionLabel(role)} (+${fmt(perClick[role])} ${unitLabel(role)})` : `Cooling (${chopSeconds}s)`));
+
+    // Role-based passive toggle for Tier 4 consumers
+    if (role === 'wheelwright') {
+      const on = (user as any).wheelPassiveEnabled !== false;
+      const toggleId = on ? 'tycoon:t4toggle:wheel:off' : 'tycoon:t4toggle:wheel:on';
+      const label = on ? 'Passive Wheels: On' : 'Passive Wheels: Off';
+      productionToggle = new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('Production Control')).setButtonAccessory(new ButtonBuilder().setCustomId(toggleId).setStyle(on ? ButtonStyle.Primary : ButtonStyle.Secondary).setLabel(label));
+    } else if (role === 'boilermaker') {
+      const on = (user as any).boilerPassiveEnabled !== false;
+      const toggleId = on ? 'tycoon:t4toggle:boiler:off' : 'tycoon:t4toggle:boiler:on';
+      const label = on ? 'Passive Boilers: On' : 'Passive Boilers: Off';
+      productionToggle = new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('Production Control')).setButtonAccessory(new ButtonBuilder().setCustomId(toggleId).setStyle(on ? ButtonStyle.Primary : ButtonStyle.Secondary).setLabel(label));
+    } else if (role === 'coachbuilder') {
+      const on = (user as any).coachPassiveEnabled !== false;
+      const toggleId = on ? 'tycoon:t4toggle:coach:off' : 'tycoon:t4toggle:coach:on';
+      const label = on ? 'Passive Cabins: On' : 'Passive Cabins: Off';
+      productionToggle = new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('Production Control')).setButtonAccessory(new ButtonBuilder().setCustomId(toggleId).setStyle(on ? ButtonStyle.Primary : ButtonStyle.Secondary).setLabel(label));
+    } else if (role === 'mechanic') {
+      const on = (user as any).mechPassiveEnabled !== false;
+      const toggleId = on ? 'tycoon:t4toggle:mech:off' : 'tycoon:t4toggle:mech:on';
+      const label = on ? 'Passive Trains: On' : 'Passive Trains: Off';
+      productionToggle = new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('Production Control')).setButtonAccessory(new ButtonBuilder().setCustomId(toggleId).setStyle(on ? ButtonStyle.Primary : ButtonStyle.Secondary).setLabel(label));
+    }
+
+    // Upstream control to pause downstream auto-consumers
+    if (role === 'lumberjack' || role === 'smithy' || role === 'wheelwright' || role === 'boilermaker' || role === 'coachbuilder') {
+      resourceControl = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('Resource Control'))
+        .setButtonAccessory(new ButtonBuilder().setCustomId('tycoon:t4:disable:consumers').setStyle(ButtonStyle.Danger).setLabel('Pause Auto-Consumers'));
+    }
 
     // Click upgrade section (shared per role)
     const levelMap: any = {
@@ -233,7 +265,15 @@ export function renderTycoon(guild: Guild, user: User) {
     const container = new ContainerBuilder()
       .setAccentColor(0xf39c12)
       .addTextDisplayComponents(header)
-      .addSectionComponents(playerRole, refreshSection, guildSection, clickSection, ...autoSections);
+      .addSectionComponents(
+        playerRole,
+        ...(productionToggle ? [productionToggle] : []),
+        ...(resourceControl ? [resourceControl] : []),
+        refreshSection,
+        guildSection,
+        clickSection,
+        ...autoSections
+      );
     return { components: [container], flags: (MessageFlags as any).IsComponentsV2 };
   } else if (tier === 3) {
     // Tier 3: Steel Boxes
@@ -287,7 +327,7 @@ export function renderTycoon(guild: Guild, user: User) {
     } as any;
 
     const header = new TextDisplayBuilder()
-      .setContent('# Guild Tycoon — Tier 3: Steel Boxes\n\nCoordinate forgers and welders to craft steel boxes.');
+      .setContent('# 🎮 Guild Tycoon — Tier 3: Steel Boxes 📦\n\nCoordinate forgers and welders to craft steel boxes.');
 
     let player: any;
     if (!role) {
@@ -356,6 +396,7 @@ export function renderTycoon(guild: Guild, user: User) {
       .setButtonAccessory(switchBtn);
 
     let weldControls: any = null;
+    let resourceControl: any = null;
     if (role === 'welder') {
       const enabled = (user as any).weldPassiveEnabled !== false;
       const toggleId = enabled ? 'tycoon:t3:weldtoggle:off' : 'tycoon:t3:weldtoggle:on';
@@ -363,6 +404,16 @@ export function renderTycoon(guild: Guild, user: User) {
       weldControls = new SectionBuilder()
         .addTextDisplayComponents(new TextDisplayBuilder().setContent('Welding Control'))
         .setButtonAccessory(new ButtonBuilder().setCustomId(toggleId).setStyle(enabled ? ButtonStyle.Primary : ButtonStyle.Secondary).setLabel(label));
+    } else if (role === 'forger') {
+      // Upstream control: allow forgers to pause downstream auto-consumers (welders)
+      resourceControl = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('Resource Control'))
+        .setButtonAccessory(
+          new ButtonBuilder()
+            .setCustomId('tycoon:t3:disable:consumers')
+            .setStyle(ButtonStyle.Danger)
+            .setLabel('Pause Auto-Consumers')
+        );
     }
 
     const refreshSection = new SectionBuilder()
@@ -457,7 +508,16 @@ export function renderTycoon(guild: Guild, user: User) {
     const container = new ContainerBuilder()
       .setAccentColor(0x9b59b6)
       .addTextDisplayComponents(header)
-      .addSectionComponents(playerRole, switchRole, ...(weldControls ? [weldControls] : []), refreshSection, clickSection, guildSection, ...autoSections);
+      .addSectionComponents(
+        playerRole,
+        switchRole,
+        ...(weldControls ? [weldControls] : []),
+        ...(resourceControl ? [resourceControl] : []),
+        refreshSection,
+        clickSection,
+        guildSection,
+        ...autoSections
+      );
     return { components: [container], flags: (MessageFlags as any).IsComponentsV2 };
   }
   if (tier === 2) {
@@ -500,7 +560,7 @@ export function renderTycoon(guild: Guild, user: User) {
     };
 
     const header = new TextDisplayBuilder()
-      .setContent('# Guild Tycoon — Tier 2: Iron Beams\n\nForge ahead with iron beams and stronger tools.');
+      .setContent('# 🎮 Guild Tycoon — Tier 2: Iron Beams 🏗️\n\nForge ahead with iron beams and stronger tools.');
 
     const player = new SectionBuilder()
       .addTextDisplayComponents(
@@ -641,7 +701,7 @@ export function renderTycoon(guild: Guild, user: User) {
 
   // Components v2 with inline buttons using sections
   const headerText = new TextDisplayBuilder()
-    .setContent('# Guild Tycoon — Tier 1: Sticks\n\nWork together to craft ever-better widgets. Start by chopping sticks!');
+    .setContent('# 🎮 Guild Tycoon — Tier 1: Sticks 🪵\n\nWork together to craft ever-better widgets. Start by chopping sticks!');
 
   // Player stats section with chop button inline
   const playerSection = new SectionBuilder()

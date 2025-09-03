@@ -38,6 +38,19 @@ export const TIER_4_RECIPES = {
   CABINS_PER_TRAIN: 1,
 } as const;
 
+// Late-game surplus production bonuses
+// Intent: upstream producers eventually outpace downstream consumers without
+// changing early/mid game pacing. Thresholds are set high so they rarely affect
+// time-to-tier goals unless a guild invests very heavily.
+export const PRODUCTION_SURPLUS = {
+  T3_FORGE: { THRESHOLD_UNITS: 100, MAX_BONUS: 1.0 },         // up to +100% at ~2x threshold
+  T4_LUMBERJACK: { THRESHOLD_UNITS: 100, MAX_BONUS: 1.0 },
+  T4_SMITHY: { THRESHOLD_UNITS: 100, MAX_BONUS: 1.0 },
+  T4_WHEEL: { THRESHOLD_UNITS: 100, MAX_BONUS: 1.0 },
+  T4_BOILER: { THRESHOLD_UNITS: 100, MAX_BONUS: 1.0 },
+  T4_COACH: { THRESHOLD_UNITS: 100, MAX_BONUS: 1.0 }
+} as const;
+
 // Click Upgrade Base Costs and Growth Rates
 export const CLICK_UPGRADES = {
   TIER_3: {

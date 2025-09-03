@@ -1,5 +1,5 @@
 // Core game math and metadata for Tier 1 (sticks)
-import { GAME_TIMING, TIER_3_RECIPES, TIER_4_RECIPES } from './config.js';
+import { GAME_TIMING, TIER_3_RECIPES, TIER_4_RECIPES, PRODUCTION_SURPLUS } from './config.js';
 
 export interface Axe {
   key: string;
@@ -107,6 +107,11 @@ export interface User {
     // Lumberjack automations
     lj1?: number; lj2?: number; lj3?: number; lj4?: number; lj5?: number;
   };
+  // Tier 4: consumer passive toggles
+  wheelPassiveEnabled?: boolean;
+  boilerPassiveEnabled?: boolean;
+  coachPassiveEnabled?: boolean;
+  mechPassiveEnabled?: boolean;
   prestigeMvpAwards?: number;
   contributedT4?: number;
   wheelsProduced?: number;
@@ -645,7 +650,12 @@ export function totalAutomationRateT3Forger(user: User): number {
   r += (a.forge3 || 0) * AUTOMATION_T3_FORGE.forge3.baseRate;
   r += (a.forge4 || 0) * AUTOMATION_T3_FORGE.forge4.baseRate;
   r += (a.forge5 || 0) * AUTOMATION_T3_FORGE.forge5.baseRate;
-  return r;
+  // Late-game surplus bonus for upstream producers
+  const sum = (a.forge1 || 0) + (a.forge2 || 0) + (a.forge3 || 0) + (a.forge4 || 0) + (a.forge5 || 0);
+  const thr = PRODUCTION_SURPLUS.T3_FORGE.THRESHOLD_UNITS;
+  const maxB = PRODUCTION_SURPLUS.T3_FORGE.MAX_BONUS;
+  const bonus = sum > thr ? Math.min(1, (sum - thr) / thr) * maxB : 0;
+  return r * (1 + bonus);
 }
 
 export function totalAutomationRateT3Welder(user: User): number {
@@ -930,27 +940,47 @@ function calculateAutomationRate(automation: Record<string, number>, definitions
 
 export function totalAutomationRateT4Wheel(u: User): number {
   const a = (u as any).automation4 || {};
-  return calculateAutomationRate(a, AUTOMATION_T4_WHEEL);
+  let r = calculateAutomationRate(a, AUTOMATION_T4_WHEEL);
+  const sum = (a.wh1 || 0) + (a.wh2 || 0) + (a.wh3 || 0) + (a.wh4 || 0) + (a.wh5 || 0);
+  const thr = PRODUCTION_SURPLUS.T4_WHEEL.THRESHOLD_UNITS; const maxB = PRODUCTION_SURPLUS.T4_WHEEL.MAX_BONUS;
+  const bonus = sum > thr ? Math.min(1, (sum - thr) / thr) * maxB : 0;
+  return r * (1 + bonus);
 }
 
 export function totalAutomationRateT4Boiler(u: User): number {
   const a = (u as any).automation4 || {};
-  return calculateAutomationRate(a, AUTOMATION_T4_BOILER);
+  let r = calculateAutomationRate(a, AUTOMATION_T4_BOILER);
+  const sum = (a.bl1 || 0) + (a.bl2 || 0) + (a.bl3 || 0) + (a.bl4 || 0) + (a.bl5 || 0);
+  const thr = PRODUCTION_SURPLUS.T4_BOILER.THRESHOLD_UNITS; const maxB = PRODUCTION_SURPLUS.T4_BOILER.MAX_BONUS;
+  const bonus = sum > thr ? Math.min(1, (sum - thr) / thr) * maxB : 0;
+  return r * (1 + bonus);
 }
 
 export function totalAutomationRateT4Coach(u: User): number {
   const a = (u as any).automation4 || {};
-  return calculateAutomationRate(a, AUTOMATION_T4_COACH);
+  let r = calculateAutomationRate(a, AUTOMATION_T4_COACH);
+  const sum = (a.cb1 || 0) + (a.cb2 || 0) + (a.cb3 || 0) + (a.cb4 || 0) + (a.cb5 || 0);
+  const thr = PRODUCTION_SURPLUS.T4_COACH.THRESHOLD_UNITS; const maxB = PRODUCTION_SURPLUS.T4_COACH.MAX_BONUS;
+  const bonus = sum > thr ? Math.min(1, (sum - thr) / thr) * maxB : 0;
+  return r * (1 + bonus);
 }
 
 export function totalAutomationRateT4Lumberjack(u: User): number {
   const a = (u as any).automation4 || {};
-  return calculateAutomationRate(a, AUTOMATION_T4_LUMBERJACK);
+  let r = calculateAutomationRate(a, AUTOMATION_T4_LUMBERJACK);
+  const sum = (a.lj1 || 0) + (a.lj2 || 0) + (a.lj3 || 0) + (a.lj4 || 0) + (a.lj5 || 0);
+  const thr = PRODUCTION_SURPLUS.T4_LUMBERJACK.THRESHOLD_UNITS; const maxB = PRODUCTION_SURPLUS.T4_LUMBERJACK.MAX_BONUS;
+  const bonus = sum > thr ? Math.min(1, (sum - thr) / thr) * maxB : 0;
+  return r * (1 + bonus);
 }
 
 export function totalAutomationRateT4Smithy(u: User): number {
   const a = (u as any).automation4 || {};
-  return calculateAutomationRate(a, AUTOMATION_T4_SMITHY);
+  let r = calculateAutomationRate(a, AUTOMATION_T4_SMITHY);
+  const sum = (a.sm1 || 0) + (a.sm2 || 0) + (a.sm3 || 0) + (a.sm4 || 0) + (a.sm5 || 0);
+  const thr = PRODUCTION_SURPLUS.T4_SMITHY.THRESHOLD_UNITS; const maxB = PRODUCTION_SURPLUS.T4_SMITHY.MAX_BONUS;
+  const bonus = sum > thr ? Math.min(1, (sum - thr) / thr) * maxB : 0;
+  return r * (1 + bonus);
 }
 
 export function totalAutomationRateT4Mechanic(u: User): number {
@@ -973,19 +1003,23 @@ export function applyPassiveTicksT4(guild: Guild, user: User, now: number = Date
     (user as any).rates.steelPerSec = rate;
   } else if (role === 'wheelwright') {
     const rate = totalAutomationRateT4Wheel(user);
-    wheelsPotential = rate * dt;
+    const enabled = (user as any).wheelPassiveEnabled !== false; // default ON
+    wheelsPotential = enabled ? rate * dt : 0;
     (user as any).rates.wheelsPerSec = rate;
   } else if (role === 'boilermaker') {
     const rate = totalAutomationRateT4Boiler(user);
-    boilersPotential = rate * dt;
+    const enabled = (user as any).boilerPassiveEnabled !== false; // default ON
+    boilersPotential = enabled ? rate * dt : 0;
     (user as any).rates.boilersPerSec = rate;
   } else if (role === 'coachbuilder') {
     const rate = totalAutomationRateT4Coach(user);
-    cabinsPotential = rate * dt;
+    const enabled = (user as any).coachPassiveEnabled !== false; // default ON
+    cabinsPotential = enabled ? rate * dt : 0;
     (user as any).rates.cabinsPerSec = rate;
   } else if (role === 'mechanic') {
     const rate = totalAutomationRateT4Mechanic(user);
-    trainsPotential = rate * dt;
+    const enabled = (user as any).mechPassiveEnabled !== false; // default ON
+    trainsPotential = enabled ? rate * dt : 0;
     (user as any).rates.trainsPerSec = rate;
   }
   
