@@ -298,9 +298,11 @@ async function loadGuildTx(client: PoolClient, guildId: string): Promise<GuildSt
   const t3: any = await qOneTx(client, `SELECT tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level FROM tier3_guild WHERE guild_id = ?`, guildId);
   const t4: any = await qOneTx(client, `SELECT tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level FROM tier4_guild WHERE guild_id = ?`, guildId);
   const currentTier = row.widget_tier || 1;
+  // Coerce BIGINT columns returned as strings into numbers where appropriate
+  const createdAtNum: number = Number(row.created_at) || Date.now();
   return {
     id: row.id,
-    createdAt: row.created_at,
+    createdAt: createdAtNum,
     widgetTier: currentTier,
     tierProgress: currentTier === 1 ? (t1?.tier_progress || 0) : currentTier === 2 ? (t2?.tier_progress || 0) : currentTier === 3 ? (t3?.tier_progress || 0) : (t4?.tier_progress || 0),
     tierGoal: currentTier === 1 ? (t1?.tier_goal || 1000000) : currentTier === 2 ? (t2?.tier_goal || 10000000) : currentTier === 3 ? (t3?.tier_goal || 20000000) : (t4?.tier_goal || 40000000),
@@ -347,10 +349,13 @@ async function loadUserTx(client: PoolClient, guildId: string, userId: string): 
            wheel_enabled, boiler_enabled, coach_enabled, mech_enabled
     FROM tier4_users WHERE guild_id = ? AND user_id = ?
   `, guildId, userId);
+  // Safely coerce BIGINT timestamps to numbers (pg returns BIGINT as strings)
+  const lastTickNum: number = Number(base?.last_tick);
+  const lastChopAtNum: number = Number(base?.last_chop_at);
   return {
     sticks: t1?.sticks || 0,
-    lastTick: base?.last_tick || Date.now(),
-    lastChopAt: base?.last_chop_at || 0,
+    lastTick: Number.isFinite(lastTickNum) && lastTickNum > 0 ? lastTickNum : Date.now(),
+    lastChopAt: Number.isFinite(lastChopAtNum) && lastChopAtNum > 0 ? lastChopAtNum : 0,
     beams: t2?.beams || 0,
     lifetimeContributed: base?.lifetime_contributed || 0,
     prestigeMvpAwards: base?.prestige_mvp_awards || 0,
@@ -548,7 +553,7 @@ async function saveUserTx(client: PoolClient, guildId: string, userId: string, u
 
 export async function getTopContributors(guildId: string, limit: number = 10): Promise<Array<{ userId: string; lifetimeContributed: number }>> {
   const rows = await qAll<{ userId: string; lifetimeContributed: number }>(
-    `SELECT user_id as userId, lifetime_contributed as lifetimeContributed FROM users WHERE guild_id = ? ORDER BY lifetime_contributed DESC LIMIT ?`,
+    `SELECT user_id AS "userId", lifetime_contributed AS "lifetimeContributed" FROM users WHERE guild_id = ? ORDER BY lifetime_contributed DESC LIMIT ?`,
     guildId, limit
   );
   return rows;
@@ -556,24 +561,24 @@ export async function getTopContributors(guildId: string, limit: number = 10): P
 
 export async function getTopContributorsByTier(guildId: string, tier: number, limit: number = 10): Promise<Array<{ userId: string; contributed: number }>> {
   if (tier === 1) {
-    return qAll(`SELECT user_id as userId, contributed_t1 as contributed FROM tier1_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
+    return qAll(`SELECT user_id AS "userId", contributed_t1 AS "contributed" FROM tier1_users WHERE guild_id = ? ORDER BY contributed_t1 DESC LIMIT ?`, guildId, limit);
   } else if (tier === 2) {
-    return qAll(`SELECT user_id as userId, contributed_t2 as contributed FROM tier2_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
+    return qAll(`SELECT user_id AS "userId", contributed_t2 AS "contributed" FROM tier2_users WHERE guild_id = ? ORDER BY contributed_t2 DESC LIMIT ?`, guildId, limit);
   } else if (tier === 3) {
-    return qAll(`SELECT user_id as userId, contributed_t3 as contributed FROM tier3_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
+    return qAll(`SELECT user_id AS "userId", contributed_t3 AS "contributed" FROM tier3_users WHERE guild_id = ? ORDER BY contributed_t3 DESC LIMIT ?`, guildId, limit);
   } else {
-    return qAll(`SELECT user_id as userId, contributed_t4 as contributed FROM tier4_users WHERE guild_id = ? ORDER BY contributed DESC LIMIT ?`, guildId, limit);
+    return qAll(`SELECT user_id AS "userId", contributed_t4 AS "contributed" FROM tier4_users WHERE guild_id = ? ORDER BY contributed_t4 DESC LIMIT ?`, guildId, limit);
   }
 }
 
 export async function getTopContributorsByRole(guildId: string, role: 'forger' | 'welder', limit: number = 10): Promise<Array<{ userId: string; contributed: number }>> {
-  return qAll(`SELECT user_id as userId, contributed_t3 as contributed FROM tier3_users WHERE guild_id = ? AND role = ? ORDER BY contributed DESC LIMIT ?`, guildId, role, limit);
+  return qAll(`SELECT user_id AS "userId", contributed_t3 AS "contributed" FROM tier3_users WHERE guild_id = ? AND role = ? ORDER BY contributed_t3 DESC LIMIT ?`, guildId, role, limit);
 }
 
 export async function getTopProducersByRole(guildId: string, role: 'forger' | 'welder', limit: number = 10): Promise<Array<{ userId: string; produced: number }>> {
   const column = role === 'forger' ? 'pipes_produced' : 'boxes_produced';
   const rows = await qAll<any>(
-    `SELECT user_id as userId, ${column} as produced FROM tier3_users WHERE guild_id = ? AND role = ? ORDER BY ${column} DESC LIMIT ?`,
+    `SELECT user_id AS "userId", ${column} AS "produced" FROM tier3_users WHERE guild_id = ? AND role = ? ORDER BY ${column} DESC LIMIT ?`,
     guildId, role, limit
   );
   return rows as any[];
@@ -581,7 +586,7 @@ export async function getTopProducersByRole(guildId: string, role: 'forger' | 'w
 
 export async function getAllT3UsersProduction(guildId: string): Promise<Array<{ userId: string; role: 'forger' | 'welder' | null; pipesProduced: number; boxesProduced: number }>> {
   const rows = await qAll<any>(
-    `SELECT user_id AS userId, role, COALESCE(pipes_produced, 0) AS pipesProduced, COALESCE(boxes_produced, 0) AS boxesProduced FROM tier3_users WHERE guild_id = ?`,
+    `SELECT user_id AS "userId", role, COALESCE(pipes_produced, 0) AS "pipesProduced", COALESCE(boxes_produced, 0) AS "boxesProduced" FROM tier3_users WHERE guild_id = ?`,
     guildId
   );
   return rows as any;
@@ -589,13 +594,13 @@ export async function getAllT3UsersProduction(guildId: string): Promise<Array<{ 
 
 export async function getAllT4UsersProduction(guildId: string): Promise<Array<{ userId: string; role: string | null; woodProduced: number; steelProduced: number; wheelsProduced: number; boilersProduced: number; cabinsProduced: number; trainsProduced: number }>> {
   const rows = await qAll<any>(
-    `SELECT user_id AS userId, role,
-           COALESCE(wood_produced, 0) AS woodProduced,
-           COALESCE(steel_produced, 0) AS steelProduced,
-           COALESCE(wheels_produced, 0) AS wheelsProduced,
-           COALESCE(boilers_produced, 0) AS boilersProduced,
-           COALESCE(cabins_produced, 0) AS cabinsProduced,
-           COALESCE(trains_produced, 0) AS trainsProduced
+    `SELECT user_id AS "userId", role,
+           COALESCE(wood_produced, 0) AS "woodProduced",
+           COALESCE(steel_produced, 0) AS "steelProduced",
+           COALESCE(wheels_produced, 0) AS "wheelsProduced",
+           COALESCE(boilers_produced, 0) AS "boilersProduced",
+           COALESCE(cabins_produced, 0) AS "cabinsProduced",
+           COALESCE(trains_produced, 0) AS "trainsProduced"
      FROM tier4_users WHERE guild_id = ?`,
     guildId
   );
@@ -603,7 +608,7 @@ export async function getAllT4UsersProduction(guildId: string): Promise<Array<{ 
 }
 
 export async function getUsersByRoleT3(guildId: string, role: 'forger' | 'welder'): Promise<string[]> {
-  const rows = await qAll<{ userId: string }>(`SELECT user_id AS userId FROM tier3_users WHERE guild_id = ? AND role = ?`, guildId, role);
+  const rows = await qAll<{ userId: string }>(`SELECT user_id AS "userId" FROM tier3_users WHERE guild_id = ? AND role = ?`, guildId, role);
   return rows.map(r => r.userId);
 }
 
@@ -611,7 +616,7 @@ export async function getUsersByRoleT4(
   guildId: string,
   role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'
 ): Promise<string[]> {
-  const rows = await qAll<{ userId: string }>(`SELECT user_id AS userId FROM tier4_users WHERE guild_id = ? AND role = ?`, guildId, role);
+  const rows = await qAll<{ userId: string }>(`SELECT user_id AS "userId" FROM tier4_users WHERE guild_id = ? AND role = ?`, guildId, role);
   return rows.map(r => r.userId);
 }
 
@@ -939,4 +944,3 @@ export async function resetAllUsersForPrestige(guildId: string): Promise<void> {
 export function saveNow(): void {
   // No-op for Postgres (writes committed in transactions)
 }
-
