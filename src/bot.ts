@@ -5,90 +5,12 @@ import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm } from './ui.j
 import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige, T3_PIPE_PER_BOX, T4_STEEL_PER_WHEEL, T4_WOOD_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
 const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
 const dTop = (...args: any[]) => { if (DEBUG_TOP) console.log('[top-debug]', ...args); };
-interface DelayedAction {
-  tier: 1 | 2 | 3 | 4;
-  userId: string;
-  guildId: string;
-  timestamp: number;
-  roleSnapshot: string | null; // Role at time of action
-  data: {
-    gained?: number;
-    pipes?: number;
-    boxesPotential?: number;
-    wheels?: number;
-    boilers?: number;
-    cabins?: number;
-  };
-}
-
 type DelayedChop =
   | { tier: 1 | 2; gained: number }
   | { tier: 3; t3: { role: 'forger' | 'welder' | null; pipes: number; boxesPotential: number } }
   | { tier: 4; t4: { role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic' | null; wood?: number; steel?: number; wheels?: number; boilers?: number; cabins?: number; trains?: number } };
 
-// Track delayed actions to prevent race conditions
-const delayedActions = new Map<string, any>();
-
-function scheduleDelayedAction(action: DelayedAction): void {
-  const key = `${action.guildId}:${action.userId}`;
-  
-  // Cancel any existing delayed action for this user
-  const existing = delayedActions.get(key);
-  if (existing) {
-    clearTimeout(existing);
-  }
-  
-  const timeout = setTimeout(() => {
-    delayedActions.delete(key);
-    applyDelayedActionSafely(action);
-  }, 8000);
-  
-  delayedActions.set(key, timeout);
-}
-
-async function applyDelayedActionSafely(action: DelayedAction): Promise<void> {
-  try {
-    await withGuildAndUser(action.guildId, action.userId, (guild, user) => {
-      // Validate state hasn't changed in ways that would invalidate the action
-      const currentRole = action.tier === 3 ? (user as any).role3 : 
-                         action.tier === 4 ? (user as any).role4 : null;
-      
-      if (action.roleSnapshot !== currentRole) {
-        console.warn(`Skipping delayed action for ${action.userId}: role changed from ${action.roleSnapshot} to ${currentRole}`);
-        return null;
-      }
-      
-      // Apply the delayed action based on tier
-      if (action.tier === 3 && action.data.pipes !== undefined) {
-        applyTier3GuildFlows(guild, user, { 
-          pipes: action.data.pipes, 
-          boxesPotential: action.data.boxesPotential || 0 
-        });
-      } else if (action.tier === 4) {
-        applyTier4GuildFlows(guild, user, { 
-          woodPotential: (action.data as any).wood || 0,
-          steelPotential: (action.data as any).steel || 0,
-          wheelsPotential: (action.data as any).wheels || 0,
-          boilersPotential: (action.data as any).boilers || 0,
-          cabinsPotential: (action.data as any).cabins || 0,
-          trainsPotential: (action.data as any).trains || 0
-        });
-      } else if ((action.tier === 1 || action.tier === 2) && action.data.gained !== undefined) {
-        applyGuildProgress(guild, action.data.gained, action.tier);
-        (user as any).lifetimeContributed = (user as any).lifetimeContributed + action.data.gained;
-        if (action.tier === 1) {
-          (user as any).contributedT1 = ((user as any).contributedT1 || 0) + action.data.gained;
-        } else {
-          (user as any).contributedT2 = ((user as any).contributedT2 || 0) + action.data.gained;
-        }
-      }
-      
-      return null;
-    });
-  } catch (error) {
-    console.error(`Failed to apply delayed action for ${action.userId}:`, error);
-  }
-}
+// (legacy delayed actions scheduler removed)
 
 const token = process.env.DISCORD_TOKEN;
 
@@ -250,6 +172,17 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         let roleTotals: Record<string, number> | undefined = undefined;
         let viewerRole: string | null = null;
         let viewerProduced = 0;
+        const dedupeByUserId = <T extends { userId: string }>(arr: T[]): T[] => {
+          const seen = new Set<string>();
+          const out: T[] = [];
+          for (const item of arr) {
+            const id = String(item.userId || '');
+            if (seen.has(id)) continue;
+            seen.add(id);
+            out.push(item);
+          }
+          return out;
+        };
         if (tier === 3) {
           // For Tier 3, rank by percent-of-role (produced / total[role])
           const rows = await getAllT3UsersProduction(guildId);
@@ -264,7 +197,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             })
             .filter(x => x.role && x.produced > 0);
           enriched.sort((a, b) => b.percent - a.percent);
-          top = enriched;
+          top = dedupeByUserId(enriched);
           viewerRole = (currentUser as any)?.role3 || null;
           if (viewerRole === 'forger') viewerProduced = (currentUser as any).pipesProduced || 0;
           else if (viewerRole === 'welder') viewerProduced = (currentUser as any).boxesProduced || 0;
@@ -288,7 +221,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
               })
               .filter(x => x.role && x.produced > 0);
             enriched.sort((a, b) => b.percent - a.percent);
-            top = enriched;
+            top = dedupeByUserId(enriched);
             viewerRole = (currentUser as any)?.role4 || null;
             if (viewerRole === 'lumberjack') viewerProduced = (currentUser as any).woodProduced || 0;
             else if (viewerRole === 'smithy') viewerProduced = (currentUser as any).steelProduced || 0;
@@ -297,7 +230,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             else if (viewerRole === 'coachbuilder') viewerProduced = (currentUser as any).cabinsProduced || 0;
             else if (viewerRole === 'mechanic') viewerProduced = (currentUser as any).trainsProduced || 0;
           } else {
-            top = await getTopContributorsByTier(guildId, tier, 5);
+            top = dedupeByUserId(await getTopContributorsByTier(guildId, tier, 5));
           }
         }
         
@@ -448,11 +381,22 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         });
         
         const res = await withGuildAndUser(guildId, selectedUserId || interaction.user.id, (guild, selectedUser) => {
-          return { tier: guild.widgetTier || 1, selectedUser } as any;
+          return { guild, tier: guild.widgetTier || 1, selectedUser } as any;
         });
         const tier = (res as any).tier as number;
         let top: Array<{ userId: string; contributed: number; role?: any; produced?: number; percent?: number }>;
         let roleTotals: Record<string, number> | undefined = undefined;
+        const dedupeByUserId = <T extends { userId: string }>(arr: T[]): T[] => {
+          const seen = new Set<string>();
+          const out: T[] = [];
+          for (const item of arr) {
+            const id = String(item.userId || '');
+            if (seen.has(id)) continue;
+            seen.add(id);
+            out.push(item);
+          }
+          return out;
+        };
         if (tier === 3) {
           const rows = await getAllT3UsersProduction(guildId);
           roleTotals = await getT3ProductionTotals(guildId) as any;
@@ -466,7 +410,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             })
             .filter(x => x.role && x.produced > 0);
           enriched.sort((a, b) => b.percent - a.percent);
-          top = enriched;
+          top = dedupeByUserId(enriched);
         } else if (tier === 4) {
           const rows = await getAllT4UsersProduction(guildId);
           roleTotals = await getT4ProductionTotals(guildId) as any;
@@ -486,9 +430,9 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             })
             .filter(x => x.role && x.produced > 0);
           enriched.sort((a, b) => b.percent - a.percent);
-          top = enriched;
+          top = dedupeByUserId(enriched);
         } else {
-          top = await getTopContributorsByTier(guildId, tier, 5);
+          top = dedupeByUserId(await getTopContributorsByTier(guildId, tier, 5));
         }
 
         const viewer = await getUserRankByTier(guildId, tier, interaction.user.id);
@@ -511,7 +455,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           return null;
         });
         dTop('button top:view', { tier, roleTotals, top });
-        view = renderLeaderboard(res as any, tier, top, selectedUserId, selectedUserId ? (res as any).selectedUser : undefined, {
+        view = renderLeaderboard((res as any).guild, tier, top, selectedUserId, selectedUserId ? (res as any).selectedUser : undefined, {
           viewerId: interaction.user.id,
           viewerRank: viewer.rank,
           viewerContributed: viewer.contributed,
@@ -625,7 +569,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       // Defer mass updates that would conflict with the current transaction
       let doPauseT3Consumers = false;
       let doPauseT4Consumers: null | ('lumberjack'|'smithy'|'wheelwright'|'boilermaker'|'coachbuilder') = null;
-      withGuildAndUser(guildId, userId, (guild, user) => {
+      await withGuildAndUser(guildId, userId, (guild, user) => {
         let customView: any | null = null;
         const tier = guild.widgetTier || 1;
         if (tier === 3) {
