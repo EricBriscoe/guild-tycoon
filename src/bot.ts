@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
-import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction } from './state.js';
+import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole } from './state.js';
 import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm } from './ui.js';
 import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige, T3_PIPE_PER_BOX, T4_STEEL_PER_WHEEL, T4_WOOD_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
 const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
@@ -614,6 +614,9 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       let tierUp = false;
       // For delayed manual collection announcement
       let delayed: DelayedChop | null = null;
+      // Defer mass updates that would conflict with the current transaction
+      let doPauseT3Consumers = false;
+      let doPauseT4Consumers: null | ('lumberjack'|'smithy'|'wheelwright'|'boilermaker'|'coachbuilder') = null;
       withGuildAndUser(guildId, userId, (guild, user) => {
         let customView: any | null = null;
         const tier = guild.widgetTier || 1;
@@ -745,6 +748,25 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           } else if (sub2 === 'off') {
             (user as any).weldPassiveEnabled = false;
           }
+        } else if (action === 't3' && sub === 'disable' && sub2 === 'consumers') {
+          // Allow upstream producers (forgers) to pause downstream auto-consumers (welders)
+          const role3 = (user as any).role3 || null;
+          if (role3 === 'forger') {
+            doPauseT3Consumers = true;
+          }
+        } else if (action === 't4' && sub === 'disable' && sub2 === 'consumers') {
+          const r4 = (user as any).role4 || null;
+          if (r4 && r4 !== 'mechanic') {
+            doPauseT4Consumers = r4 as any;
+          }
+        } else if (action === 't4toggle') {
+          const target = sub as 'wheel'|'boiler'|'coach'|'mech';
+          const mode = sub2 as 'on'|'off';
+          const on = mode === 'on';
+          if (target === 'wheel') (user as any).wheelPassiveEnabled = on;
+          else if (target === 'boiler') (user as any).boilerPassiveEnabled = on;
+          else if (target === 'coach') (user as any).coachPassiveEnabled = on;
+          else if (target === 'mech') (user as any).mechPassiveEnabled = on;
         } else if (action === 'buy' && sub === 't3click') {
           const role = (sub2 === 'forger' ? 'forger' : 'welder') as 'forger' | 'welder';
           const r = tryBuyT3ClickUpgrade(guild, role);
@@ -762,10 +784,25 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         view = customView || renderTycoon(guild, user);
       });
 
-      {
-        const ok = await safeUpdate(buttonInteraction, view);
-        if (!ok) return;
-      }
+        {
+          // Apply deferred mass updates now that the guild/user write is finished
+          if (doPauseT3Consumers) {
+            try {
+              disableAllWeldersPassive(guildId);
+            } catch (e) {
+              console.error('Failed to pause T3 consumers:', e);
+            }
+          }
+          if (doPauseT4Consumers) {
+            try {
+              disableT4ConsumersByRole(guildId, doPauseT4Consumers);
+            } catch (e) {
+              console.error('Failed to pause T4 consumers:', e);
+            }
+          }
+          const ok = await safeUpdate(buttonInteraction, view);
+          if (!ok) return;
+        }
 
       // After updating the ephemeral view, announce delayed manual collection publicly and apply after delay
       if (action === 'chop' && delayed && interaction.channel) {

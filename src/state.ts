@@ -351,6 +351,21 @@ function initDb(): void {
     }
     db!.pragma(`user_version = 3`);
   }
+
+  // Add Tier 4 consumer passive toggles
+  if (userVersion < 4) {
+    try {
+      const t4ucols = db!.prepare(`PRAGMA table_info(tier4_users)`).all() as Array<{ name: string }>;
+      const have = new Set(t4ucols.map(c => c.name));
+      if (!have.has('wheel_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN wheel_enabled INTEGER NOT NULL DEFAULT 1`);
+      if (!have.has('boiler_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN boiler_enabled INTEGER NOT NULL DEFAULT 1`);
+      if (!have.has('coach_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN coach_enabled INTEGER NOT NULL DEFAULT 1`);
+      if (!have.has('mech_enabled')) db!.exec(`ALTER TABLE tier4_users ADD COLUMN mech_enabled INTEGER NOT NULL DEFAULT 1`);
+    } catch (e) {
+      console.error('Migration add T4 passive toggles failed:', e);
+    }
+    db!.pragma(`user_version = 4`);
+  }
 }
 
 function ensureGuild(guildId: string): void {
@@ -454,7 +469,8 @@ function loadUser(guildId: string, userId: string): User {
     SELECT role, wh1, wh2, wh3, wh4, wh5, bl1, bl2, bl3, bl4, bl5, cb1, cb2, cb3, cb4, cb5,
            lj1, lj2, lj3, lj4, lj5, sm1, sm2, sm3, sm4, sm5, ta1, ta2, ta3, ta4, ta5,
            rate_wheels_per_sec, rate_boilers_per_sec, rate_cabins_per_sec, rate_wood_per_sec, rate_steel_per_sec, rate_trains_per_sec,
-           contributed_t4, wheels_produced, boilers_produced, cabins_produced, wood_produced, steel_produced, trains_produced
+           contributed_t4, wheels_produced, boilers_produced, cabins_produced, wood_produced, steel_produced, trains_produced,
+           wheel_enabled, boiler_enabled, coach_enabled, mech_enabled
     FROM tier4_users WHERE guild_id = ? AND user_id = ?
   `).get(guildId, userId) as any;
   return {
@@ -500,7 +516,11 @@ function loadUser(guildId: string, userId: string): User {
     cabinsProduced: t4?.cabins_produced || 0,
     woodProduced: t4?.wood_produced || 0,
     steelProduced: t4?.steel_produced || 0,
-    trainsProduced: t4?.trains_produced || 0
+    trainsProduced: t4?.trains_produced || 0,
+    wheelPassiveEnabled: (t4?.wheel_enabled ?? 1) !== 0,
+    boilerPassiveEnabled: (t4?.boiler_enabled ?? 1) !== 0,
+    coachPassiveEnabled: (t4?.coach_enabled ?? 1) !== 0,
+    mechPassiveEnabled: (t4?.mech_enabled ?? 1) !== 0
   };
 }
 
@@ -610,7 +630,8 @@ function saveUser(guildId: string, userId: string, u: User): void {
       rate_wood_per_sec = ?, rate_steel_per_sec = ?, rate_trains_per_sec = ?,
       contributed_t4 = ?,
       wheels_produced = ?, boilers_produced = ?, cabins_produced = ?,
-      wood_produced = ?, steel_produced = ?, trains_produced = ?
+      wood_produced = ?, steel_produced = ?, trains_produced = ?,
+      wheel_enabled = ?, boiler_enabled = ?, coach_enabled = ?, mech_enabled = ?
     WHERE guild_id = ? AND user_id = ?
   `).run(
     (u as any).role4 || null,
@@ -657,6 +678,10 @@ function saveUser(guildId: string, userId: string, u: User): void {
     (u as any).woodProduced || 0,
     (u as any).steelProduced || 0,
     (u as any).trainsProduced || 0,
+    ((u as any).wheelPassiveEnabled === false ? 0 : 1),
+    ((u as any).boilerPassiveEnabled === false ? 0 : 1),
+    ((u as any).coachPassiveEnabled === false ? 0 : 1),
+    ((u as any).mechPassiveEnabled === false ? 0 : 1),
     guildId,
     userId
   );
@@ -910,6 +935,42 @@ export function computeAndAwardMvp(guildId: string): string | null {
 export function getAllGuildIds(): string[] {
   const rows = db!.prepare('SELECT id FROM guilds').all() as Array<{ id: string }>;
   return rows.map(r => r.id);
+}
+
+// Mass-disable passive welding for all welders in a guild.
+// Returns number of users affected.
+export function disableAllWeldersPassive(guildId: string): number {
+  const fn = db!.transaction((gid: string) => {
+    const stmt = db!.prepare(`
+      UPDATE tier3_users
+      SET weld_enabled = 0
+      WHERE guild_id = ? AND role = 'welder' AND weld_enabled != 0
+    `);
+    const info = stmt.run(gid);
+    return (info?.changes || 0) as number;
+  });
+  return fn(guildId);
+}
+
+// Mass-disable Tier 4 consumers based on the actor role
+export function disableT4ConsumersByRole(
+  guildId: string,
+  actor: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'
+): number {
+  const fn = db!.transaction((gid: string, r: string) => {
+    let changes = 0;
+    if (r === 'lumberjack') {
+      changes += db!.prepare(`UPDATE tier4_users SET wheel_enabled = 0 WHERE guild_id = ? AND role = 'wheelwright' AND wheel_enabled != 0`).run(gid).changes || 0;
+      changes += db!.prepare(`UPDATE tier4_users SET coach_enabled = 0 WHERE guild_id = ? AND role = 'coachbuilder' AND coach_enabled != 0`).run(gid).changes || 0;
+    } else if (r === 'smithy') {
+      changes += db!.prepare(`UPDATE tier4_users SET wheel_enabled = 0 WHERE guild_id = ? AND role = 'wheelwright' AND wheel_enabled != 0`).run(gid).changes || 0;
+      changes += db!.prepare(`UPDATE tier4_users SET boiler_enabled = 0 WHERE guild_id = ? AND role = 'boilermaker' AND boiler_enabled != 0`).run(gid).changes || 0;
+    } else if (r === 'wheelwright' || r === 'boilermaker' || r === 'coachbuilder') {
+      changes += db!.prepare(`UPDATE tier4_users SET mech_enabled = 0 WHERE guild_id = ? AND role = 'mechanic' AND mech_enabled != 0`).run(gid).changes || 0;
+    }
+    return changes;
+  });
+  return fn(guildId, actor);
 }
 
 // Periodic background refresh across all guilds.
@@ -1180,7 +1241,8 @@ export function loadUsersWithRoleData(guildId: string, userIds: string[], tier: 
                rate_wood_per_sec, rate_steel_per_sec, rate_trains_per_sec,
                contributed_t4,
                wheels_produced, boilers_produced, cabins_produced,
-               wood_produced, steel_produced, trains_produced
+               wood_produced, steel_produced, trains_produced,
+               wheel_enabled, boiler_enabled, coach_enabled, mech_enabled
         FROM tier4_users WHERE guild_id = ? AND user_id IN (${placeholders})
       `).all(gid, ...uids) as any[];
     }
@@ -1270,7 +1332,11 @@ function constructUserFromRowData(base: any, tier: any, tierNum: number): User {
     cabinsProduced: tier.cabins_produced || 0,
     woodProduced: tier.wood_produced || 0,
     steelProduced: tier.steel_produced || 0,
-    trainsProduced: tier.trains_produced || 0
+    trainsProduced: tier.trains_produced || 0,
+    wheelPassiveEnabled: (tier.wheel_enabled ?? 1) !== 0,
+    boilerPassiveEnabled: (tier.boiler_enabled ?? 1) !== 0,
+    coachPassiveEnabled: (tier.coach_enabled ?? 1) !== 0,
+    mechPassiveEnabled: (tier.mech_enabled ?? 1) !== 0
   };
   
   return user;
