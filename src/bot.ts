@@ -759,6 +759,8 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       // After updating the ephemeral view, announce delayed manual collection publicly and apply after delay
       if (action === 'chop' && delayed && interaction.channel) {
         const d = delayed as DelayedChop;
+        // Keep reference to the public announcement so we can clean it up
+        let announceMsg: any = null;
         try {
           const tier = d.tier as number;
           const applyDelayMs = 60_000; // 1 minute delay before applying collection
@@ -788,12 +790,15 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             else if (role === 'coachbuilder') content = `⏳ <@${userId}> will carve +${Math.floor(r4.cabins || 0)} cabins <t:${applyAtSec}:R> (at <t:${applyAtSec}:T>).`;
             else if (role === 'mechanic') content = `⏳ <@${userId}> will assemble +${Math.floor(r4.trains || 0)} trains <t:${applyAtSec}:R> (at <t:${applyAtSec}:T>).`;
           }
-          if (content) await (interaction.channel as any).send({ content });
+          if (content) {
+            announceMsg = await (interaction.channel as any).send({ content });
+          }
         } catch (e) {
           console.error('announce error:', e);
         }
 
-        // Apply after delay (1 minute)
+        // Apply after delay, then clean up the public announcement
+        const applyDelayMs = 60_000;
         setTimeout(() => {
           (async () => {
             try {
@@ -820,9 +825,16 @@ client.on('interactionCreate', async (interaction: Interaction) => {
               }
             } catch (e) {
               console.error('delayed apply error:', e);
+            } finally {
+              // Attempt to delete the announcement message to reduce channel clutter
+              try {
+                if (announceMsg && typeof announceMsg.delete === 'function') {
+                  await announceMsg.delete().catch(() => {});
+                }
+              } catch (_) {}
             }
           })();
-        }, 60_000).unref?.();
+        }, applyDelayMs).unref?.();
       }
       if (tierUp && interaction.channel) {
         const top = await getTopContributorsByTier(guildId, 1, 5);
