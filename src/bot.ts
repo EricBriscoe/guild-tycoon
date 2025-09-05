@@ -549,6 +549,16 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           return null;
         });
         if (tierUp) await computeAndAwardMvp(guildId);
+        // After awarding MVP for the completed run, reset all users' state
+        if (didPrestige) {
+          try {
+            await resetAllUsersForPrestige(guildId);
+            // Re-render the view to reflect the freshly reset user/guild state
+            await withGuildAndUser(guildId, userId, (g2, u2) => { view = renderTycoon(g2, u2); return null; });
+          } catch (e) {
+            console.error('Failed to reset users for prestige:', e);
+          }
+        }
         {
           const ok = await safeUpdate(buttonInteraction, view);
           if (!ok) return;

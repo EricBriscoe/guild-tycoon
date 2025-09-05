@@ -274,19 +274,20 @@ async function ensureUserTx(client: PoolClient, guildId: string, userId: string)
   }
   const t1 = await qOneTx(client, 'SELECT user_id FROM tier1_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t1) {
-    await qRunTx(client, `INSERT INTO tier1_users (guild_id, user_id, sticks, axe_level, click_power, lumberjacks, foremen, logging_camps, sawmills, arcane_grove, rate_sticks_per_sec, contributed_t1) VALUES (?, ?, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)`, guildId, userId);
+    // Rely on table defaults for all fields
+    await qRunTx(client, `INSERT INTO tier1_users (guild_id, user_id) VALUES (?, ?)`, guildId, userId);
   }
   const t2 = await qOneTx(client, 'SELECT user_id FROM tier2_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t2) {
-    await qRunTx(client, `INSERT INTO tier2_users (guild_id, user_id, beams, pickaxe_level, pick_click_power, miners, smelters, foundries, beam_mills, arcane_forge, rate_beams_per_sec, contributed_t2) VALUES (?, ?, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)`, guildId, userId);
+    await qRunTx(client, `INSERT INTO tier2_users (guild_id, user_id) VALUES (?, ?)`, guildId, userId);
   }
   const t3 = await qOneTx(client, 'SELECT user_id FROM tier3_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t3) {
-    await qRunTx(client, `INSERT INTO tier3_users (guild_id, user_id, role, f1, f2, f3, f4, f5, w1, w2, w3, w4, w5, rate_pipes_per_sec, rate_boxes_per_sec, contributed_t3, weld_enabled, pipes_produced, boxes_produced) VALUES (?, ?, NULL, 0,0,0,0,0, 0,0,0,0,0, 0, 0, 0, 1, 0, 0)`, guildId, userId);
+    await qRunTx(client, `INSERT INTO tier3_users (guild_id, user_id) VALUES (?, ?)`, guildId, userId);
   }
   const t4 = await qOneTx(client, 'SELECT user_id FROM tier4_users WHERE guild_id = ? AND user_id = ?', guildId, userId);
   if (!t4) {
-    await qRunTx(client, `INSERT INTO tier4_users (guild_id, user_id, role, wh1, wh2, wh3, wh4, wh5, bl1, bl2, bl3, bl4, bl5, cb1, cb2, cb3, cb4, cb5, lj1, lj2, lj3, lj4, lj5, sm1, sm2, sm3, sm4, sm5, ta1, ta2, ta3, ta4, ta5, rate_wheels_per_sec, rate_boilers_per_sec, rate_cabins_per_sec, rate_wood_per_sec, rate_steel_per_sec, rate_trains_per_sec, contributed_t4, wheels_produced, boilers_produced, cabins_produced, wood_produced, steel_produced, trains_produced, wheel_enabled, boiler_enabled, coach_enabled, mech_enabled) VALUES (?, ?, NULL, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0, 0,0,0, 0,0,0, 1,1,1,1)`, guildId, userId);
+    await qRunTx(client, `INSERT INTO tier4_users (guild_id, user_id) VALUES (?, ?)`, guildId, userId);
   }
 }
 
@@ -932,11 +933,22 @@ export async function resetAllUsersForPrestige(guildId: string): Promise<void> {
       WHERE guild_id = ?`, guildId);
     await qRunTx(client, `UPDATE tier4_users SET 
       role = NULL,
+      -- Reset all automation counts across all Tier 4 roles
       wh1 = 0, wh2 = 0, wh3 = 0, wh4 = 0, wh5 = 0,
       bl1 = 0, bl2 = 0, bl3 = 0, bl4 = 0, bl5 = 0,
       cb1 = 0, cb2 = 0, cb3 = 0, cb4 = 0, cb5 = 0,
+      lj1 = 0, lj2 = 0, lj3 = 0, lj4 = 0, lj5 = 0,
+      sm1 = 0, sm2 = 0, sm3 = 0, sm4 = 0, sm5 = 0,
+      ta1 = 0, ta2 = 0, ta3 = 0, ta4 = 0, ta5 = 0,
+      -- Reset production rates for all Tier 4 resources and parts
       rate_wheels_per_sec = 0, rate_boilers_per_sec = 0, rate_cabins_per_sec = 0,
-      contributed_t4 = 0, wheels_produced = 0, boilers_produced = 0, cabins_produced = 0
+      rate_wood_per_sec = 0, rate_steel_per_sec = 0, rate_trains_per_sec = 0,
+      -- Reset contribution and produced counters
+      contributed_t4 = 0,
+      wheels_produced = 0, boilers_produced = 0, cabins_produced = 0,
+      wood_produced = 0, steel_produced = 0, trains_produced = 0,
+      -- Re-enable all consumers by default
+      wheel_enabled = 1, boiler_enabled = 1, coach_enabled = 1, mech_enabled = 1
       WHERE guild_id = ?`, guildId);
   });
 }
