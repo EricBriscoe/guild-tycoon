@@ -20,7 +20,7 @@ services:
     profiles: ["setup"]
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: guild-tycoon-postgres
     environment:
       - POSTGRES_USER=postgres
@@ -29,8 +29,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata17:/var/lib/postgresql/data
     restart: unless-stopped
 
 volumes:
   pgdata:
+  pgdata17:
