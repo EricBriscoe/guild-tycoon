@@ -980,7 +980,7 @@ export function renderLeaderboard(
     );
   }
 
-  // Include viewer rank if not in top list
+  // Include viewer rank (mention viewer to avoid ambiguity in non-ephemeral message)
   if (options?.viewerId && !top.find(t => t.userId === options.viewerId)) {
     let youValue = options.viewerContributed || 0;
     let youTotal = totalContributions;
@@ -1003,9 +1003,9 @@ export function renderLeaderboard(
     listSections.push(
       new SectionBuilder()
         .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`**You • #${options.viewerRank || 0} — ${valueText}**\n${bar}`)
+          new TextDisplayBuilder().setContent(`**<@${options.viewerId}> • #${options.viewerRank || 0} — ${valueText}**\n${bar}`)
         )
-        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:viewer').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Your Rank'))
+        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:viewer').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Viewer'))
     );
   }
 
