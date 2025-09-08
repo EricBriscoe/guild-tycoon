@@ -4,7 +4,8 @@ import {
   MessageFlags,
   TextDisplayBuilder,
   ContainerBuilder,
-  SectionBuilder
+  SectionBuilder,
+  ThumbnailBuilder
 } from 'discord.js';
 import {
   AXES,
@@ -1019,6 +1020,7 @@ export function renderLeaderboard(
 
   return { components: [container], flags: (MessageFlags as any).IsComponentsV2 };
 }
+
 
 // Confirmation UI for switching into Forger (destructive reset of T3 progress)
 export function renderRoleSwitchConfirm(guild: Guild, user: User, targetRole: 'forger' | 'welder') {

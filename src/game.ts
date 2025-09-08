@@ -1,5 +1,37 @@
 // Core game math and metadata for Tier 1 (sticks)
-import { GAME_TIMING, TIER_3_RECIPES, TIER_4_RECIPES, PRODUCTION_SURPLUS } from './config.js';
+import {
+  GAME_TIMING,
+  TIER_3_RECIPES,
+  TIER_4_RECIPES,
+  PRODUCTION_SURPLUS,
+  CLICK_UPGRADES,
+  AXES as CFG_AXES,
+  PICKAXES as CFG_PICKAXES,
+  AUTOMATION as CFG_AUTOMATION,
+  AUTOMATION_T2 as CFG_AUTOMATION_T2,
+  AUTOMATION_T3_FORGE as CFG_AUTOMATION_T3_FORGE,
+  AUTOMATION_T3_WELD as CFG_AUTOMATION_T3_WELD,
+  AUTOMATION_T4_WHEEL as CFG_AUTOMATION_T4_WHEEL,
+  AUTOMATION_T4_BOILER as CFG_AUTOMATION_T4_BOILER,
+  AUTOMATION_T4_COACH as CFG_AUTOMATION_T4_COACH,
+  AUTOMATION_T4_LUMBERJACK as CFG_AUTOMATION_T4_LUMBERJACK,
+  AUTOMATION_T4_SMITHY as CFG_AUTOMATION_T4_SMITHY,
+  AUTOMATION_T4_MECHANIC as CFG_AUTOMATION_T4_MECHANIC
+} from './config.js';
+
+// Re-export shared config so UI and calculations reference the same source data
+export const AXES: ReadonlyArray<Axe> = CFG_AXES as any;
+export const PICKAXES: ReadonlyArray<Pickaxe> = CFG_PICKAXES as any;
+export const AUTOMATION: Record<string, AutomationType> = CFG_AUTOMATION as any;
+export const AUTOMATION_T2: Record<string, AutomationType> = CFG_AUTOMATION_T2 as any;
+export const AUTOMATION_T3_FORGE: Record<string, AutomationType> = CFG_AUTOMATION_T3_FORGE as any;
+export const AUTOMATION_T3_WELD: Record<string, AutomationType> = CFG_AUTOMATION_T3_WELD as any;
+export const AUTOMATION_T4_WHEEL: Record<string, AutomationType> = CFG_AUTOMATION_T4_WHEEL as any;
+export const AUTOMATION_T4_BOILER: Record<string, AutomationType> = CFG_AUTOMATION_T4_BOILER as any;
+export const AUTOMATION_T4_COACH: Record<string, AutomationType> = CFG_AUTOMATION_T4_COACH as any;
+export const AUTOMATION_T4_LUMBERJACK: Record<string, AutomationType> = CFG_AUTOMATION_T4_LUMBERJACK as any;
+export const AUTOMATION_T4_SMITHY: Record<string, AutomationType> = CFG_AUTOMATION_T4_SMITHY as any;
+export const AUTOMATION_T4_MECHANIC: Record<string, AutomationType> = CFG_AUTOMATION_T4_MECHANIC as any;
 
 export interface Axe {
   key: string;
@@ -189,100 +221,10 @@ export function getGuildInventory(guild: Guild): {
   return inv as any;
 }
 
-export const AXES: Axe[] = [
-  { key: 'hand', name: 'Bare Hands', level: 0, clickPower: 1, cost: 0 },
-  { key: 'wood', name: 'Wooden Axe', level: 1, clickPower: 3, cost: 100 },
-  { key: 'stone', name: 'Stone Axe', level: 2, clickPower: 8, cost: 1000 },
-  { key: 'iron', name: 'Iron Axe', level: 3, clickPower: 20, cost: 10_000 },
-  { key: 'steel', name: 'Steel Axe', level: 4, clickPower: 60, cost: 50_000 },
-  { key: 'mythic', name: 'Mythic Axe', level: 5, clickPower: 200, cost: 100_000 }
-];
-
-export const AUTOMATION: Record<string, AutomationType> = {
-  lumberjack: {
-    key: 'lumberjacks',
-    name: 'Lumberjack',
-    baseRate: 0.1, // sticks/sec
-    baseCost: 25,
-    growth: 1.15
-  },
-  foreman: {
-    key: 'foremen',
-    name: 'Foreman',
-    baseRate: 0.8,
-    baseCost: 250,
-    growth: 1.18
-  },
-  loggingCamp: {
-    key: 'loggingCamps',
-    name: 'Logging Camp',
-    baseRate: 4,
-    baseCost: 2000,
-    growth: 1.2
-  },
-  sawmill: {
-    key: 'sawmills',
-    name: 'Sawmill',
-    baseRate: 15,
-    baseCost: 9000,
-    growth: 1.22
-  },
-  arcaneGrove: {
-    key: 'arcaneGrove',
-    name: 'Arcane Grove',
-    baseRate: 60,
-    baseCost: 30000,
-    growth: 1.25
-  }
-};
+// AXES and Tier 1 AUTOMATION are sourced from config.ts
 
 // Tier 2 tools and automation
-export const PICKAXES: Pickaxe[] = [
-  { key: 'hand', name: 'Bare Hands', level: 0, clickPower: 1, cost: 0 },
-  { key: 'stone', name: 'Stone Pickaxe', level: 1, clickPower: 3, cost: 100 },
-  { key: 'iron', name: 'Iron Pickaxe', level: 2, clickPower: 8, cost: 1_000 },
-  { key: 'steel', name: 'Steel Pickaxe', level: 3, clickPower: 20, cost: 10_000 },
-  { key: 'titanium', name: 'Titanium Pickaxe', level: 4, clickPower: 60, cost: 100_000 },
-  { key: 'mythic', name: 'Mythic Pickaxe', level: 5, clickPower: 200, cost: 1_000_000 }
-];
-
-export const AUTOMATION_T2: Record<string, AutomationType> = {
-  miner: {
-    key: 'miners',
-    name: 'Miner',
-    baseRate: 0.1, // beams/sec
-    baseCost: 25,
-    growth: 1.15
-  },
-  smelter: {
-    key: 'smelters',
-    name: 'Smelter',
-    baseRate: 0.8,
-    baseCost: 250,
-    growth: 1.18
-  },
-  foundry: {
-    key: 'foundries',
-    name: 'Foundry',
-    baseRate: 4,
-    baseCost: 2000,
-    growth: 1.2
-  },
-  beamMill: {
-    key: 'beamMills',
-    name: 'Beam Mill',
-    baseRate: 15,
-    baseCost: 9000,
-    growth: 1.22
-  },
-  arcaneForge: {
-    key: 'arcaneForge',
-    name: 'Arcane Forge',
-    baseRate: 60,
-    baseCost: 30000,
-    growth: 1.25
-  }
-};
+// PICKAXES and Tier 2 AUTOMATION are sourced from config.ts
 
 // Unified manual click power progression used by higher tiers (levels 0..5)
 // Matches Tier 1/2 tool clickPower sequence: 1, 3, 8, 20, 60, 200
@@ -515,8 +457,6 @@ export const T3_PIPE_PER_BOX = TIER_3_RECIPES.PIPES_PER_BOX; // from config
 
 // Tier 3 Shared Click Upgrades (per-role, guild-shared)
 export const T3_CLICK_LEVEL_MAX = 5 as const;
-export const T3_CLICK_FORGER = { baseCostPipes: 600, growth: 1.25 } as const;
-export const T3_CLICK_WELDER = { baseCostBoxes: 60, growth: 1.25 } as const;
 
 // Tier 3 Click Upgrade Names (level 0..5; 5 is Mythic)
 export const T3_FORGER_CLICK_NAMES = [
@@ -622,25 +562,13 @@ export function t3WelderClickBase(guild: Guild): number {
 
 export function t3ClickUpgradeCost(role: 'forger' | 'welder', level: number): number {
   if (level >= T3_CLICK_LEVEL_MAX) return Number.POSITIVE_INFINITY;
-  if (role === 'forger') return Math.floor(T3_CLICK_FORGER.baseCostPipes * Math.pow(T3_CLICK_FORGER.growth, level));
-  return Math.floor(T3_CLICK_WELDER.baseCostBoxes * Math.pow(T3_CLICK_WELDER.growth, level));
+  const conf = CLICK_UPGRADES.TIER_3;
+  if (role === 'forger') return Math.floor(conf.FORGER.baseCostPipes * Math.pow(conf.FORGER.growth, level));
+  return Math.floor(conf.WELDER.baseCostBoxes * Math.pow(conf.WELDER.growth, level));
 }
 
 // Tier 3 Automation (5 per role)
-export const AUTOMATION_T3_FORGE: Record<string, AutomationType> = {
-  forge1: { key: 'forge1', name: 'Pipe Foundry', baseRate: 0.5, baseCost: 50, growth: 1.15 },
-  forge2: { key: 'forge2', name: 'Alloy Smelter', baseRate: 1.0, baseCost: 200, growth: 1.16 },
-  forge3: { key: 'forge3', name: 'Extrusion Press', baseRate: 2.0, baseCost: 800, growth: 1.18 },
-  forge4: { key: 'forge4', name: 'Annealing Oven', baseRate: 4.0, baseCost: 3200, growth: 1.2 },
-  forge5: { key: 'forge5', name: 'Coating Line', baseRate: 8.0, baseCost: 12800, growth: 1.22 }
-};
-export const AUTOMATION_T3_WELD: Record<string, AutomationType> = {
-  weld1: { key: 'weld1', name: 'Welding Rig', baseRate: (0.5) / 3, baseCost: 50, growth: 1.15 },
-  weld2: { key: 'weld2', name: 'Assembly Jig', baseRate: (1.0) / 3, baseCost: 200, growth: 1.16 },
-  weld3: { key: 'weld3', name: 'Robotic Welder', baseRate: (2.0) / 3, baseCost: 800, growth: 1.18 },
-  weld4: { key: 'weld4', name: 'Bracing Station', baseRate: (4.0) / 3, baseCost: 3200, growth: 1.2 },
-  weld5: { key: 'weld5', name: 'Finishing Line', baseRate: (8.0) / 3, baseCost: 12800, growth: 1.22 }
-};
+// Tier 3 automation is sourced from config.ts
 
 export function totalAutomationRateT3Forger(user: User): number {
   const a = user.automation3 || {};
@@ -847,12 +775,6 @@ export const T4_CABINS_PER_TRAIN = TIER_4_RECIPES.CABINS_PER_TRAIN;
 
 // Tier 4 Shared Click Upgrades (per-role)
 export const T4_CLICK_LEVEL_MAX = 5 as const;
-export const T4_CLICK_LUMBERJACK = { baseCostWood: 50, growth: 1.25 } as const;
-export const T4_CLICK_SMITHY = { baseCostSteel: 30, growth: 1.25 } as const;
-export const T4_CLICK_WHEELWRIGHT = { baseCostWheels: 40, growth: 1.25 } as const;
-export const T4_CLICK_BOILER = { baseCostBoilers: 20, growth: 1.25 } as const;
-export const T4_CLICK_COACH = { baseCostCabins: 10, growth: 1.25 } as const;
-export const T4_CLICK_MECHANIC = { baseCostTrains: 5, growth: 1.25 } as const;
 
 export function t4LumberjackClickBase(guild: Guild): number {
   const lvl = Math.min((guild as any).t4LumberjackClickLevel || 0, T4_CLICK_LEVEL_MAX);
@@ -880,57 +802,17 @@ export function t4MechanicClickBase(guild: Guild): number {
 }
 export function t4ClickUpgradeCost(role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic', level: number): number {
   if (level >= T4_CLICK_LEVEL_MAX) return Number.POSITIVE_INFINITY;
-  if (role === 'lumberjack') return Math.floor(T4_CLICK_LUMBERJACK.baseCostWood * Math.pow(T4_CLICK_LUMBERJACK.growth, level));
-  if (role === 'smithy') return Math.floor(T4_CLICK_SMITHY.baseCostSteel * Math.pow(T4_CLICK_SMITHY.growth, level));
-  if (role === 'wheelwright') return Math.floor(T4_CLICK_WHEELWRIGHT.baseCostWheels * Math.pow(T4_CLICK_WHEELWRIGHT.growth, level));
-  if (role === 'boilermaker') return Math.floor(T4_CLICK_BOILER.baseCostBoilers * Math.pow(T4_CLICK_BOILER.growth, level));
-  if (role === 'coachbuilder') return Math.floor(T4_CLICK_COACH.baseCostCabins * Math.pow(T4_CLICK_COACH.growth, level));
-  return Math.floor(T4_CLICK_MECHANIC.baseCostTrains * Math.pow(T4_CLICK_MECHANIC.growth, level));
+  const conf = CLICK_UPGRADES.TIER_4;
+  if (role === 'lumberjack') return Math.floor(conf.LUMBERJACK.baseCostWood * Math.pow(conf.LUMBERJACK.growth, level));
+  if (role === 'smithy') return Math.floor(conf.SMITHY.baseCostSteel * Math.pow(conf.SMITHY.growth, level));
+  if (role === 'wheelwright') return Math.floor(conf.WHEELWRIGHT.baseCostWheels * Math.pow(conf.WHEELWRIGHT.growth, level));
+  if (role === 'boilermaker') return Math.floor(conf.BOILERMAKER.baseCostBoilers * Math.pow(conf.BOILERMAKER.growth, level));
+  if (role === 'coachbuilder') return Math.floor(conf.COACHBUILDER.baseCostCabins * Math.pow(conf.COACHBUILDER.growth, level));
+  return Math.floor(conf.TRAINASSEMBLER.baseCostTrains * Math.pow(conf.TRAINASSEMBLER.growth, level));
 }
 
 // Tier 4 Automation (5 per role)
-export const AUTOMATION_T4_WHEEL: Record<string, AutomationType> = {
-  wh1: { key: 'wh1', name: 'Spoke Shop', baseRate: 0.5, baseCost: 10, growth: 1.15 },
-  wh2: { key: 'wh2', name: 'Lathe Line', baseRate: 1.0, baseCost: 40, growth: 1.16 },
-  wh3: { key: 'wh3', name: 'Press Form', baseRate: 2.0, baseCost: 160, growth: 1.18 },
-  wh4: { key: 'wh4', name: 'Rim Forge', baseRate: 4.0, baseCost: 640, growth: 1.2 },
-  wh5: { key: 'wh5', name: 'Balancing Rig', baseRate: 8.0, baseCost: 2560, growth: 1.22 }
-};
-export const AUTOMATION_T4_BOILER: Record<string, AutomationType> = {
-  bl1: { key: 'bl1', name: 'Tube Rack', baseRate: 0.4, baseCost: 8, growth: 1.15 },
-  bl2: { key: 'bl2', name: 'Sheet Roller', baseRate: 0.8, baseCost: 32, growth: 1.16 },
-  bl3: { key: 'bl3', name: 'Shell Welder', baseRate: 1.6, baseCost: 128, growth: 1.18 },
-  bl4: { key: 'bl4', name: 'Rivet Station', baseRate: 3.2, baseCost: 512, growth: 1.2 },
-  bl5: { key: 'bl5', name: 'Pressure Tester', baseRate: 6.4, baseCost: 2048, growth: 1.22 }
-};
-export const AUTOMATION_T4_COACH: Record<string, AutomationType> = {
-  cb1: { key: 'cb1', name: 'Carpentry Bench', baseRate: 0.3, baseCost: 6, growth: 1.15 },
-  cb2: { key: 'cb2', name: 'Upholstery Line', baseRate: 0.6, baseCost: 24, growth: 1.16 },
-  cb3: { key: 'cb3', name: 'Panel Bender', baseRate: 1.2, baseCost: 96, growth: 1.18 },
-  cb4: { key: 'cb4', name: 'Paint Booth', baseRate: 2.4, baseCost: 384, growth: 1.2 },
-  cb5: { key: 'cb5', name: 'Finishing Line', baseRate: 4.8, baseCost: 1536, growth: 1.22 }
-};
-export const AUTOMATION_T4_LUMBERJACK: Record<string, AutomationType> = {
-  lj1: { key: 'lj1', name: 'Hand Axe', baseRate: 0.8, baseCost: 16, growth: 1.15 },
-  lj2: { key: 'lj2', name: 'Crosscut Saw', baseRate: 1.6, baseCost: 64, growth: 1.16 },
-  lj3: { key: 'lj3', name: 'Felling Wedge', baseRate: 3.2, baseCost: 256, growth: 1.18 },
-  lj4: { key: 'lj4', name: 'Logging Crane', baseRate: 6.4, baseCost: 1024, growth: 1.2 },
-  lj5: { key: 'lj5', name: 'Tree Processor', baseRate: 12.8, baseCost: 4096, growth: 1.22 }
-};
-export const AUTOMATION_T4_SMITHY: Record<string, AutomationType> = {
-  sm1: { key: 'sm1', name: 'Forge Bellows', baseRate: 0.6, baseCost: 12, growth: 1.15 },
-  sm2: { key: 'sm2', name: 'Anvil Station', baseRate: 1.2, baseCost: 48, growth: 1.16 },
-  sm3: { key: 'sm3', name: 'Quench Tank', baseRate: 2.4, baseCost: 192, growth: 1.18 },
-  sm4: { key: 'sm4', name: 'Power Hammer', baseRate: 4.8, baseCost: 768, growth: 1.2 },
-  sm5: { key: 'sm5', name: 'Blast Furnace', baseRate: 9.6, baseCost: 3072, growth: 1.22 }
-};
-export const AUTOMATION_T4_MECHANIC: Record<string, AutomationType> = {
-  ta1: { key: 'ta1', name: 'Assembly Jig', baseRate: 0.2, baseCost: 4, growth: 1.15 },
-  ta2: { key: 'ta2', name: 'Coupling Tools', baseRate: 0.4, baseCost: 16, growth: 1.16 },
-  ta3: { key: 'ta3', name: 'Hydraulic Lift', baseRate: 0.8, baseCost: 64, growth: 1.18 },
-  ta4: { key: 'ta4', name: 'Rolling Crane', baseRate: 1.6, baseCost: 256, growth: 1.2 },
-  ta5: { key: 'ta5', name: 'Assembly Line', baseRate: 3.2, baseCost: 1024, growth: 1.22 }
-};
+// Tier 4 automation is sourced from config.ts
 
 // Generic automation rate calculation
 function calculateAutomationRate(automation: Record<string, number>, definitions: Record<string, AutomationType>): number {
