@@ -21,6 +21,7 @@ const commands = [
     .setDescription('Show the top contributors in this server')
     .toJSON(),
   {
+    type: 1,
     name: 'activity',
     description: 'Show passive activity status for a role',
     options: [
@@ -32,7 +33,21 @@ const commands = [
         autocomplete: true
       }
     ]
-  } as any
+  } as any,
+  {
+    type: 1,
+    name: 'blame',
+    description: 'Graph per-user spend for a role (last 12 hours)',
+    options: [
+      {
+        type: 3, // String
+        name: 'role',
+        description: 'Role to analyze',
+        required: true,
+        autocomplete: true
+      }
+    ]
+  } as any,
 ];
 
 const rest = new REST({ version: '10' }).setToken(token);

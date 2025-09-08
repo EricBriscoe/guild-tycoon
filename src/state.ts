@@ -251,6 +251,23 @@ async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_tier3_role_contributed ON tier3_users(guild_id, role, contributed_t3 DESC);
     CREATE INDEX IF NOT EXISTS idx_tier3_role_produced_pipes ON tier3_users(guild_id, role, pipes_produced DESC);
     CREATE INDEX IF NOT EXISTS idx_tier3_role_produced_boxes ON tier3_users(guild_id, role, boxes_produced DESC);
+    
+    -- Track user purchase/spend events
+    CREATE TABLE IF NOT EXISTS purchase_events (
+      id BIGSERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      ts BIGINT NOT NULL,
+      tier INTEGER NOT NULL,
+      role TEXT,
+      resource TEXT NOT NULL,
+      amount DOUBLE PRECISION NOT NULL,
+      kind TEXT NOT NULL,
+      item_key TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_purchase_by_guild_ts ON purchase_events(guild_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_purchase_by_guild_role_ts ON purchase_events(guild_id, role, ts);
+    CREATE INDEX IF NOT EXISTS idx_purchase_by_guild_res_ts ON purchase_events(guild_id, resource, ts);
   `);
 }
 
@@ -955,4 +972,61 @@ export async function resetAllUsersForPrestige(guildId: string): Promise<void> {
 
 export function saveNow(): void {
   // No-op for Postgres (writes committed in transactions)
+}
+
+// Record a user purchase/spend event
+export async function logPurchaseEvent(args: {
+  guildId: string;
+  userId: string;
+  ts?: number;
+  tier: number;
+  role?: string | null;
+  resource: string;
+  amount: number;
+  kind: 'automation' | 'click_upgrade' | 'tool' | 'other';
+  itemKey?: string | null;
+}): Promise<void> {
+  const { guildId, userId, tier, role, resource, amount, kind } = args;
+  const ts = Math.floor((args.ts ?? Date.now()));
+  await qRun(
+    `INSERT INTO purchase_events (guild_id, user_id, ts, tier, role, resource, amount, kind, item_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    guildId, userId, ts, tier|0, role || null, resource, amount || 0, kind, args.itemKey || null
+  );
+}
+
+export interface PurchaseEvent { user_id: string; ts: number; amount: number; }
+
+export async function getPurchaseEvents(
+  guildId: string,
+  opts: { tier?: number; role?: string | null; resource?: string; since?: number; until?: number }
+): Promise<PurchaseEvent[]> {
+  const role = opts.role || null;
+  const resource = opts.resource || null;
+  let since = Math.floor(opts.since ?? 0);
+  let until = Math.floor(opts.until ?? Date.now());
+  if (!Number.isFinite(since)) since = 0;
+  if (!Number.isFinite(until)) until = Date.now();
+  let sql = `SELECT user_id, ts, amount FROM purchase_events WHERE guild_id = ? AND ts BETWEEN ? AND ?`;
+  const params: any[] = [guildId, since, until];
+  if (typeof opts.tier === 'number') { sql += ` AND tier = ?`; params.push(opts.tier | 0); }
+  if (role) { sql += ` AND role = ?`; params.push(role); }
+  if (resource) { sql += ` AND resource = ?`; params.push(resource); }
+  sql += ` ORDER BY ts ASC`;
+  return await qAll(sql, ...params) as any;
+}
+
+export async function getEarliestPurchaseTs(
+  guildId: string,
+  opts: { tier?: number; role?: string | null; resource?: string }
+): Promise<number | null> {
+  const role = opts.role || null;
+  const resource = opts.resource || null;
+  let sql = `SELECT MIN(ts) AS m FROM purchase_events WHERE guild_id = ?`;
+  const params: any[] = [guildId];
+  if (typeof opts.tier === 'number') { sql += ` AND tier = ?`; params.push(opts.tier | 0); }
+  if (role) { sql += ` AND role = ?`; params.push(role); }
+  if (resource) { sql += ` AND resource = ?`; params.push(resource); }
+  const row: any = await qOne(sql, ...params);
+  const m = row?.m;
+  return (m !== null && m !== undefined) ? Number(m) : null;
 }

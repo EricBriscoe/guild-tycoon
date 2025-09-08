@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
-import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole } from './state.js';
+import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole, logPurchaseEvent, getPurchaseEvents } from './state.js';
+import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
+import 'chart.js/auto';
 import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm } from './ui.js';
 import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige, T3_PIPE_PER_BOX, T4_STEEL_PER_WHEEL, T4_WOOD_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
 const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
@@ -88,14 +90,14 @@ async function ensureGuildInteraction(interaction: Interaction): Promise<boolean
 
 client.on('interactionCreate', async (interaction: Interaction) => {
   try {
-    // Autocomplete for /activity role
+    // Autocomplete for /activity and /blame role
     if ((interaction as any).isAutocomplete?.()) {
       const auto: any = interaction as any;
       if (!interaction.inGuild?.()) {
         await auto.respond([]);
         return;
       }
-      if (auto.commandName === 'activity') {
+      if (auto.commandName === 'activity' || auto.commandName === 'blame') {
         const guildId = interaction.guildId!;
         let tier = 1;
         await withGuildAndUser(guildId, interaction.user.id, (g, u) => { tier = g.widgetTier || 1; return null; });
@@ -254,6 +256,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           allowedMentions: { parse: [] as any[] }
         } as any);
       }
+
       if (command.commandName === 'activity') {
         if (!(await ensureGuildInteraction(interaction))) return;
         const guildId = interaction.guildId!;
@@ -362,6 +365,145 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           flags: MessageFlags.Ephemeral
         } as any);
       }
+      
+      if (command.commandName === 'blame') {
+        if (!(await ensureGuildInteraction(interaction))) return;
+        const guildId = interaction.guildId!;
+        const roleOpt = (command as any).options?.getString('role') as string | null;
+        if (!roleOpt) {
+          await command.reply({ content: 'Please specify a role.', flags: MessageFlags.Ephemeral } as any);
+          return;
+        }
+        let tier = 1;
+        await withGuildAndUser(guildId, interaction.user.id, (g, _u) => { tier = g.widgetTier || 1; return null; });
+        const validT3 = ['forger','welder'];
+        const validT4 = ['lumberjack','smithy','wheelwright','boilermaker','coachbuilder','mechanic'];
+        const valid = tier === 3 ? validT3 : (tier === 4 ? validT4 : []);
+        if (!valid.includes(roleOpt)) {
+          const hint = valid.length ? `Valid roles for Tier ${tier}: ${valid.join(', ')}` : `Tier ${tier} has no roles.`;
+          await command.reply({ content: `Invalid role for current tier. ${hint}`, flags: MessageFlags.Ephemeral } as any);
+          return;
+        }
+        // Aggregate spend per user per hour (12 bins over past 12 hours)
+        const now = Date.now();
+        const HOUR = 60 * 60 * 1000;
+        const HOURS = 12;
+        const nowHour = new Date(now);
+        nowHour.setMinutes(0, 0, 0);
+        const thisHourStart = nowHour.getTime();
+        const rangeStart = thisHourStart - (HOURS - 1) * HOUR; // inclusive start
+        const events = await getPurchaseEvents(guildId, { tier, role: roleOpt, since: rangeStart, until: now });
+        if (!events.length) {
+          await command.reply({ content: `No purchases recorded for '${roleOpt}' in the last 12 hours.`, flags: MessageFlags.Ephemeral } as any);
+          return;
+        }
+        // Prepare hour labels and bin mapping (relative labels: -Nh)
+        const hourLabels: string[] = [];
+        for (let i = 0; i < HOURS; i++) {
+          const hoursAgo = (HOURS - 1) - i; // 11,10,...,0
+          hourLabels.push(`-${hoursAgo}h`);
+        }
+        // Build user -> [h0..hN]
+        const perUser: Map<string, number[]> = new Map();
+        const totalsForRank: Map<string, number> = new Map();
+        for (const e of events) {
+          const idx = Math.floor((e.ts - rangeStart) / HOUR);
+          if (idx < 0 || idx > (HOURS - 1)) continue;
+          const arr = perUser.get(e.user_id) || Array(HOURS).fill(0);
+          arr[idx] += (e.amount || 0);
+          perUser.set(e.user_id, arr);
+          totalsForRank.set(e.user_id, (totalsForRank.get(e.user_id) || 0) + (e.amount || 0));
+        }
+        if (perUser.size === 0) {
+          await command.reply({ content: `No purchases recorded for '${roleOpt}' in the last 12 hours.`, flags: MessageFlags.Ephemeral } as any);
+          return;
+        }
+        // Pick top users by total and optionally aggregate the rest as "Others"
+        const TOP = 10;
+        const ranked = Array.from(totalsForRank.entries()).sort((a,b) => b[1] - a[1]);
+        const topUsers = ranked.slice(0, TOP).map(([id]) => id);
+        const othersUsers = ranked.slice(TOP).map(([id]) => id);
+        // Resolve display names
+        const guildAny: any = (command as any).guild;
+        const userIds = topUsers;
+        let displayNames: Record<string, string> = {};
+        try {
+          if (!guildAny) throw new Error('Guild not found in interaction');
+          const fetched: any = await (guildAny.members as any).fetch({ user: userIds });
+          for (const uid of userIds) {
+            const m = fetched.get ? fetched.get(uid) : (Array.isArray(fetched) ? fetched.find((x: any) => x.id === uid) : (fetched?.[uid] || null));
+            const tag = m?.nickname || m?.user?.globalName || m?.user?.username || uid;
+            displayNames[uid] = String(tag);
+          }
+        } catch (_) {
+          for (const uid of userIds) displayNames[uid] = `@${uid}`;
+        }
+        // Build line datasets (per user)
+        const N = topUsers.length + (othersUsers.length ? 1 : 0);
+        const colorFor = (i: number) => `hsl(${Math.round((360 * i) / Math.max(1, N))}, 70%, 55%)`;
+        const datasets: any[] = [];
+        topUsers.forEach((uid, i) => {
+          const arr = perUser.get(uid) || Array(HOURS).fill(0);
+          datasets.push({
+            type: 'line',
+            label: displayNames[uid] || uid,
+            data: arr.map(v => Math.floor(v)),
+            backgroundColor: colorFor(i),
+            borderColor: colorFor(i),
+            borderWidth: 2,
+            pointRadius: 2,
+            tension: 0.25,
+            fill: false
+          });
+        });
+        if (othersUsers.length) {
+          const others = Array(HOURS).fill(0) as number[];
+          for (const uid of othersUsers) {
+            const arr = perUser.get(uid) || Array(HOURS).fill(0);
+            for (let i = 0; i < HOURS; i++) others[i] += arr[i];
+          }
+          datasets.push({
+            type: 'line',
+            label: 'Others',
+            data: others.map(v => Math.floor(v)),
+            backgroundColor: 'rgba(160,160,160,0.6)',
+            borderColor: 'rgba(120,120,120,1)',
+            borderWidth: 2,
+            pointRadius: 2,
+            tension: 0.25,
+            fill: false
+          });
+        }
+        // Infer resource label for title
+        const resource = tier === 3
+          ? (roleOpt === 'forger' ? 'pipes' : 'boxes')
+          : (t4RoleToResource(roleOpt));
+        // Render line chart across daily bins
+        const width = 900;
+        const height = 480;
+        const canvas = new ChartJSNodeCanvas({ width, height, backgroundColour: 'white' });
+        const conf: any = {
+          type: 'line',
+          data: { labels: hourLabels, datasets },
+          options: {
+            responsive: false,
+            plugins: {
+              legend: { display: true, position: 'bottom' },
+              title: { display: true, text: `Blame — ${roleOpt} (last 12 hours) — ${resource} spent per hour` }
+            },
+            scales: {
+              x: { ticks: { maxTicksLimit: 12 } },
+              y: { beginAtZero: true }
+            }
+          }
+        };
+        const buffer = await canvas.renderToBuffer(conf);
+        await command.reply({
+          content: `Spending by role '${roleOpt}' over the last 12 hours (Tier ${tier}).`,
+          files: [{ attachment: buffer, name: 'blame.png' }],
+          flags: MessageFlags.Ephemeral
+        } as any);
+      }
       return;
     }
 
@@ -369,6 +511,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       const buttonInteraction = interaction as ButtonInteraction;
       if (!(await ensureGuildInteraction(interaction))) return;
       const [prefix, action, sub, sub2] = buttonInteraction.customId.split(':');
+      
       if (prefix === 'top') {
         const guildId = interaction.guildId!;
         await refreshGuildContributions(guildId);
@@ -579,6 +722,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       // Defer mass updates that would conflict with the current transaction
       let doPauseT3Consumers = false;
       let doPauseT4Consumers: null | ('lumberjack'|'smithy'|'wheelwright'|'boilermaker'|'coachbuilder') = null;
+      const purchaseLogs: Array<{ tier: number; role: string | null; resource: string; amount: number; kind: 'automation'|'click_upgrade'|'tool'|'other'; itemKey?: string }>= [];
       await withGuildAndUser(guildId, userId, (guild, user) => {
         let customView: any | null = null;
         const tier = guild.widgetTier || 1;
@@ -668,29 +812,34 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         } else if (action === 'buy' && sub === 'axe') {
           const res = tryBuyAxeShared(guild);
           if (res.ok) {
-            // no guild progress on spending, progress was counted when earning
+            purchaseLogs.push({ tier: 1, role: null, resource: 'sticks', amount: res.next?.cost || 0, kind: 'tool', itemKey: 'axe' });
           }
         } else if (action === 'buy' && sub === 'pick') {
           const res = tryBuyPickShared(guild);
           if (res.ok) {
-            // no guild progress on spending
+            purchaseLogs.push({ tier: 2, role: null, resource: 'beams', amount: res.next?.cost || 0, kind: 'tool', itemKey: 'pickaxe' });
           }
         } else if (action === 'buy' && sub === 'auto') {
           const kind = sub2;
           if (tier === 3) {
             const res = tryBuyAutomationT3(guild, user, kind as any);
             if (res.ok) {
-              // updated next tick
+              const role3 = (user as any).role3 || null;
+              const resource = (kind || '').startsWith('forge') ? 'pipes' : 'boxes';
+              purchaseLogs.push({ tier: 3, role: role3, resource, amount: res.cost || 0, kind: 'automation', itemKey: kind || '' });
             }
           } else if (tier === 4) {
             const res = tryBuyAutomationT4(guild, user, kind as any);
             if (res.ok) {
-              // updated next tick
+              const role4 = (user as any).role4 || null;
+              const resource = t4AutomationKindToResource(kind || '');
+              purchaseLogs.push({ tier: 4, role: role4, resource, amount: res.cost || 0, kind: 'automation', itemKey: kind || '' });
             }
           } else {
             const res = tryBuyAutomation(guild, user, kind, tier);
             if (res.ok) {
-              // Updated via state helpers
+              const resource = tier === 1 ? 'sticks' : 'beams';
+              purchaseLogs.push({ tier, role: null, resource, amount: res.cost || 0, kind: 'automation', itemKey: kind || '' });
             }
           }
         } else if (action === 't4' && sub === 'choose') {
@@ -733,13 +882,15 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           const role = (sub2 === 'forger' ? 'forger' : 'welder') as 'forger' | 'welder';
           const r = tryBuyT3ClickUpgrade(guild, role);
           if (r.ok) {
-            // no direct progress; improved manual action is shared across role
+            const resource = role === 'forger' ? 'pipes' : 'boxes';
+            purchaseLogs.push({ tier: 3, role, resource, amount: r.cost || 0, kind: 'click_upgrade', itemKey: role });
           }
         } else if (action === 'buy' && sub === 't4click') {
           const role = (sub2 || '') as any;
           const r = tryBuyT4ClickUpgrade(guild, role);
           if (r.ok) {
-            // improved manual action shared across that T4 role
+            const resource = t4RoleToResource(role);
+            purchaseLogs.push({ tier: 4, role, resource, amount: r.cost || 0, kind: 'click_upgrade', itemKey: role });
           }
         }
 
@@ -764,6 +915,14 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           }
           const ok = await safeUpdate(buttonInteraction, view);
           if (!ok) return;
+        }
+        // Flush any purchase logs after successful update
+        try {
+          for (const e of purchaseLogs) {
+            await logPurchaseEvent({ guildId, userId, tier: e.tier, role: e.role, resource: e.resource, amount: e.amount, kind: e.kind, itemKey: e.itemKey });
+          }
+        } catch (e) {
+          console.error('Failed to log purchase events:', e);
         }
 
       // After updating the ephemeral view, announce delayed manual collection publicly and apply after delay
@@ -876,3 +1035,28 @@ client.on('interactionCreate', async (interaction: Interaction) => {
 });
 
 client.login(token);
+
+function t4AutomationKindToResource(kind: string): string {
+  if ((kind || '').startsWith('wh')) return 'wheels';
+  if ((kind || '').startsWith('bl')) return 'boilers';
+  if ((kind || '').startsWith('cb')) return 'cabins';
+  if ((kind || '').startsWith('lj')) return 'wood';
+  if ((kind || '').startsWith('sm')) return 'steel';
+  if ((kind || '').startsWith('ta')) return 'trains';
+  return 'trains';
+}
+
+// T4 role -> resource mapping for purchase logs
+function t4RoleToResource(role: string): string {
+  switch (role) {
+    case 'lumberjack': return 'wood';
+    case 'smithy': return 'steel';
+    case 'wheelwright': return 'wheels';
+    case 'boilermaker': return 'boilers';
+    case 'coachbuilder': return 'cabins';
+    case 'mechanic': return 'trains';
+    default: return 'trains';
+  }
+}
+
+ 
