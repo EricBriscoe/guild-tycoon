@@ -50,17 +50,30 @@ export async function qRun(sql: string, ...params: any[]): Promise<{ changes: nu
 }
 
 export async function transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const res = await fn(client);
-    await client.query('COMMIT');
-    return res;
-  } catch (e) {
-    try { await client.query('ROLLBACK'); } catch {}
-    throw e;
-  } finally {
-    client.release();
+  const maxAttempts = Number(process.env.PG_TX_MAX_ATTEMPTS || 3);
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const res = await fn(client);
+      await client.query('COMMIT');
+      return res;
+    } catch (e: any) {
+      try { await client.query('ROLLBACK'); } catch {}
+      // Retry on Postgres deadlock detected (40P01)
+      if (e && e.code === '40P01' && attempt < maxAttempts) {
+        const backoffMs = 50 * attempt;
+        await new Promise(r => setTimeout(r, backoffMs));
+        client.release();
+        continue;
+      }
+      throw e;
+    } finally {
+      // Ensure client is released in all cases
+      try { client.release(); } catch {}
+    }
   }
 }
 
@@ -81,4 +94,3 @@ export async function qRunTx(client: PoolClient, sql: string, ...params: any[]):
   const { rowCount } = await client.query({ text, values: params });
   return { changes: rowCount || 0 };
 }
-

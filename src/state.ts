@@ -2,7 +2,8 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { PoolClient } from 'pg';
 import { exec, qAll, qAllTx, qOne, qOneTx, qRun, qRunTx, transaction } from './db.js';
-import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX } from './game.js';
+import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX, T4_WOOD_PER_WHEEL, T4_STEEL_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
+import { TIER_GOALS } from './config.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 
@@ -22,7 +23,7 @@ function defaultGuildState(guildId: string): GuildState {
     createdAt: Date.now(),
     widgetTier: 1,
     tierProgress: 0,
-    tierGoal: 1000000,
+    tierGoal: TIER_GOALS.TIER_1,
     totals: { sticks: 0, beams: 0 }
   };
 }
@@ -276,10 +277,28 @@ async function ensureGuildTx(client: PoolClient, guildId: string): Promise<void>
   if (!row) {
     const g = defaultGuildState(guildId);
     await qRunTx(client, `INSERT INTO guilds (id, created_at, widget_tier, prestige_points) VALUES (?, ?, ?, 0)`, g.id, g.createdAt, g.widgetTier);
-    await qRunTx(client, `INSERT INTO tier1_guild (guild_id, tier_progress, tier_goal, total_sticks, inv_sticks, axe_level) VALUES (?, ?, ?, ?, ?, ?)`, g.id, 0, 1000000, 0, 0, 0);
-    await qRunTx(client, `INSERT INTO tier2_guild (guild_id, tier_progress, tier_goal, total_beams, inv_beams, pickaxe_level) VALUES (?, ?, ?, ?, ?, ?)`, g.id, 0, 10000000, 0, 0, 0);
-    await qRunTx(client, `INSERT INTO tier3_guild (guild_id, tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`, g.id, 0, 20000000, 0, 0, 0, 0);
-    await qRunTx(client, `INSERT INTO tier4_guild (guild_id, tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level) VALUES (?, ?, ?, 0,0,0,0, 0,0, 0,0,0,0, 0,0, 0,0,0, 0,0,0)`, g.id, 0, 100000000);
+    await qRunTx(client, `INSERT INTO tier1_guild (guild_id, tier_progress, tier_goal, total_sticks, inv_sticks, axe_level) VALUES (?, ?, ?, ?, ?, ?)`, g.id, 0, TIER_GOALS.TIER_1, 0, 0, 0);
+    await qRunTx(client, `INSERT INTO tier2_guild (guild_id, tier_progress, tier_goal, total_beams, inv_beams, pickaxe_level) VALUES (?, ?, ?, ?, ?, ?)`, g.id, 0, TIER_GOALS.TIER_2, 0, 0, 0);
+    await qRunTx(client, `INSERT INTO tier3_guild (guild_id, tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`, g.id, 0, TIER_GOALS.TIER_3, 0, 0, 0, 0);
+    await qRunTx(client, `INSERT INTO tier4_guild (guild_id, tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level) VALUES (?, ?, ?, 0,0,0,0, 0,0, 0,0,0,0, 0,0, 0,0,0, 0,0,0)`, g.id, 0, TIER_GOALS.TIER_4);
+  } else {
+    // Backfill missing per-tier guild rows for existing guilds
+    const t1 = await qOneTx(client, 'SELECT guild_id FROM tier1_guild WHERE guild_id = ?', guildId);
+    if (!t1) {
+      await qRunTx(client, `INSERT INTO tier1_guild (guild_id, tier_progress, tier_goal, total_sticks, inv_sticks, axe_level) VALUES (?, ?, ?, ?, ?, ?)`, guildId, 0, TIER_GOALS.TIER_1, 0, 0, 0);
+    }
+    const t2 = await qOneTx(client, 'SELECT guild_id FROM tier2_guild WHERE guild_id = ?', guildId);
+    if (!t2) {
+      await qRunTx(client, `INSERT INTO tier2_guild (guild_id, tier_progress, tier_goal, total_beams, inv_beams, pickaxe_level) VALUES (?, ?, ?, ?, ?, ?)`, guildId, 0, TIER_GOALS.TIER_2, 0, 0, 0);
+    }
+    const t3 = await qOneTx(client, 'SELECT guild_id FROM tier3_guild WHERE guild_id = ?', guildId);
+    if (!t3) {
+      await qRunTx(client, `INSERT INTO tier3_guild (guild_id, tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`, guildId, 0, TIER_GOALS.TIER_3, 0, 0, 0, 0);
+    }
+    const t4 = await qOneTx(client, 'SELECT guild_id FROM tier4_guild WHERE guild_id = ?', guildId);
+    if (!t4) {
+      await qRunTx(client, `INSERT INTO tier4_guild (guild_id, tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level) VALUES (?, ?, ?, 0,0,0,0, 0,0, 0,0,0,0, 0,0, 0,0,0, 0,0,0)`, guildId, 0, TIER_GOALS.TIER_4);
+    }
   }
 }
 
@@ -323,7 +342,8 @@ async function loadGuildTx(client: PoolClient, guildId: string): Promise<GuildSt
     createdAt: createdAtNum,
     widgetTier: currentTier,
     tierProgress: currentTier === 1 ? (t1?.tier_progress || 0) : currentTier === 2 ? (t2?.tier_progress || 0) : currentTier === 3 ? (t3?.tier_progress || 0) : (t4?.tier_progress || 0),
-    tierGoal: currentTier === 1 ? (t1?.tier_goal || 1000000) : currentTier === 2 ? (t2?.tier_goal || 10000000) : currentTier === 3 ? (t3?.tier_goal || 20000000) : (t4?.tier_goal || 40000000),
+    // Use config.ts as the source of truth for tier goals
+    tierGoal: currentTier === 1 ? TIER_GOALS.TIER_1 : currentTier === 2 ? TIER_GOALS.TIER_2 : currentTier === 3 ? TIER_GOALS.TIER_3 : TIER_GOALS.TIER_4,
     totals: { sticks: t1?.total_sticks || 0, beams: t2?.total_beams || 0, pipes: t3?.total_pipes || 0, boxes: t3?.total_boxes || 0, wood: t4?.total_wood || 0, steel: t4?.total_steel || 0, wheels: t4?.total_wheels || 0, boilers: t4?.total_boilers || 0, cabins: t4?.total_cabins || 0, trains: t4?.total_trains || 0 },
     inventory: { sticks: t1?.inv_sticks || 0, beams: t2?.inv_beams || 0, pipes: t3?.inv_pipes || 0, boxes: t3?.inv_boxes || 0, wood: t4?.inv_wood || 0, steel: t4?.inv_steel || 0, wheels: t4?.inv_wheels || 0, boilers: t4?.inv_boilers || 0, cabins: t4?.inv_cabins || 0, trains: t4?.inv_trains || 0 },
     axeLevel: t1?.axe_level || 0,
@@ -859,15 +879,74 @@ export async function refreshGuildContributions(guildId: string, excludeUserId?:
         guild.tierProgress = Math.min(guild.tierGoal, invBoxes);
       }
     } else {
-      for (const r of rows) {
-        const uid = r.user_id;
-        if (excludeUserId && uid === excludeUserId) continue;
-        const u = await loadUserTx(client, guildId, uid);
-        if (tier === 4) {
-          const delta4 = applyPassiveTicksT4(guild, u, now);
-          const res4 = applyTier4GuildFlows(guild, u, delta4);
-          total += (res4.trainsMade || 0);
-        } else {
+      if (tier === 4) {
+        // Fair Tier 4 processing in phases to avoid one user draining inventory
+        type T4D = ReturnType<typeof applyPassiveTicksT4>;
+        type T4Rec = { id: string; user: User; role: string | null; delta: T4D };
+        const recs: T4Rec[] = [];
+        for (const r of rows) {
+          const uid = r.user_id;
+          if (excludeUserId && uid === excludeUserId) continue;
+          const u = await loadUserTx(client, guildId, uid);
+          const d = applyPassiveTicksT4(guild, u, now);
+          recs.push({ id: uid, user: u, role: (u as any).role4 || null, delta: d });
+        }
+        // Phase 1: add all base materials
+        for (const rec of recs) {
+          const d: any = rec.delta || {};
+          const only = { woodPotential: Math.max(0, d.woodPotential || 0), steelPotential: Math.max(0, d.steelPotential || 0), wheelsPotential: 0, boilersPotential: 0, cabinsPotential: 0, trainsPotential: 0 } as any;
+          if (only.woodPotential > 0 || only.steelPotential > 0) {
+            applyTier4GuildFlows(guild, rec.user, only);
+          }
+        }
+        // Helper to scale and apply consumer potentials fairly
+        const applyScaled = (key: 'wheelsPotential'|'boilersPotential'|'cabinsPotential'|'trainsPotential', available: number) => {
+          const demand = recs.reduce((s, r) => s + Math.max(0, ((r.delta as any)[key] || 0)), 0);
+          if (demand <= 0 || available <= 0) return;
+          const scale = Math.min(1, available / demand);
+          for (const rec of recs) {
+            const pot = Math.max(0, ((rec.delta as any)[key] || 0)) * scale;
+            if (pot > 0) {
+              const d = { woodPotential: 0, steelPotential: 0, wheelsPotential: 0, boilersPotential: 0, cabinsPotential: 0, trainsPotential: 0 } as any;
+              d[key] = pot;
+              const res = applyTier4GuildFlows(guild, rec.user, d);
+              if (key === 'trainsPotential') total += (res.trainsMade || 0);
+            }
+          }
+        };
+        // Phase 2: wheelwrights (limited by both materials)
+        const invW = ((guild as any).inventory?.wood || 0);
+        const invS = ((guild as any).inventory?.steel || 0);
+        const canWheels = Math.max(0, Math.min(Math.floor(invW / T4_WOOD_PER_WHEEL), Math.floor(invS / T4_STEEL_PER_WHEEL)));
+        applyScaled('wheelsPotential', canWheels);
+        // Phase 3: boilermakers (limited by steel)
+        const invS2 = ((guild as any).inventory?.steel || 0);
+        const canBoilers = Math.max(0, Math.floor(invS2 / T4_STEEL_PER_BOILER));
+        applyScaled('boilersPotential', canBoilers);
+        // Phase 4: coachbuilders (limited by wood)
+        const invW2 = ((guild as any).inventory?.wood || 0);
+        const canCabins = Math.max(0, Math.floor(invW2 / T4_WOOD_PER_CABIN));
+        applyScaled('cabinsPotential', canCabins);
+        // Phase 5: mechanics (limited by components)
+        const invWh = ((guild as any).inventory?.wheels || 0);
+        const invBo = ((guild as any).inventory?.boilers || 0);
+        const invCa = ((guild as any).inventory?.cabins || 0);
+        const canTrains = Math.max(0, Math.min(
+          Math.floor(invWh / T4_WHEELS_PER_TRAIN),
+          Math.floor(invBo / T4_BOILERS_PER_TRAIN),
+          Math.floor(invCa / T4_CABINS_PER_TRAIN)
+        ));
+        applyScaled('trainsPotential', canTrains);
+        // Save users
+        for (const rec of recs) {
+          await saveUserTx(client, guildId, rec.id, rec.user);
+          refreshed++;
+        }
+      } else {
+        for (const r of rows) {
+          const uid = r.user_id;
+          if (excludeUserId && uid === excludeUserId) continue;
+          const u = await loadUserTx(client, guildId, uid);
           const gained = applyPassiveTicks(u, tier, now);
           if (gained > 0) {
             applyGuildProgress(guild, gained, tier);
@@ -880,9 +959,9 @@ export async function refreshGuildContributions(guildId: string, excludeUserId?:
             }
             total += gained;
           }
+          await saveUserTx(client, guildId, uid, u);
+          refreshed++;
         }
-        await saveUserTx(client, guildId, uid, u);
-        refreshed++;
       }
     }
     await saveGuildTx(client, guild);

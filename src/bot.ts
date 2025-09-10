@@ -3,7 +3,7 @@ import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Int
 import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole, logPurchaseEvent, getPurchaseEvents } from './state.js';
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 import 'chart.js/auto';
-import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm } from './ui.js';
+import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm, renderRoleSwitchSelectorT4 } from './ui.js';
 import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige, T3_PIPE_PER_BOX, T4_STEEL_PER_WHEEL, T4_WOOD_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
 const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
 const dTop = (...args: any[]) => { if (DEBUG_TOP) console.log('[top-debug]', ...args); };
@@ -126,6 +126,9 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         if (!(await ensureGuildInteraction(interaction))) return;
         const guildId = interaction.guildId!;
         const userId = interaction.user.id;
+
+        // Ensure all users' passive gains are applied so shared inventory reflects everyone
+        try { await refreshGuildContributions(guildId); } catch (e) { console.error('pre-tycoon refresh failed:', e); }
 
         let view: any;
         let tierUp = false;
@@ -722,6 +725,8 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       // Defer mass updates that would conflict with the current transaction
       let doPauseT3Consumers = false;
       let doPauseT4Consumers: null | ('lumberjack'|'smithy'|'wheelwright'|'boilermaker'|'coachbuilder') = null;
+      // Global refresh flag to update shared inventory from all users' passives
+      let doGlobalRefresh = false;
       const purchaseLogs: Array<{ tier: number; role: string | null; resource: string; amount: number; kind: 'automation'|'click_upgrade'|'tool'|'other'; itemKey?: string }>= [];
       await withGuildAndUser(guildId, userId, (guild, user) => {
         let customView: any | null = null;
@@ -772,7 +777,9 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             }
           }
         } else if (action === 'refresh') {
-          // no-op beyond passive tick above; just re-render
+          // Mark to refresh all users after this transaction completes
+          doGlobalRefresh = true;
+          // no further changes; re-render after refresh
         } else if (action === 'tier2' && sub === 'advance') {
           const r = advanceTierIfReady(guild);
           tierUp = r.tierUp || tierUp;
@@ -853,6 +860,31 @@ client.on('interactionCreate', async (interaction: Interaction) => {
               // Do not clear other automations; role switch does not destroy T4 automations by default
             }
           }
+        } else if (action === 't4' && sub === 'switch') {
+          // Show selector + warning; selection buttons directly confirm
+          customView = renderRoleSwitchSelectorT4(guild, user);
+        } else if (action === 't4' && sub === 'confirm') {
+          const valid = ['lumberjack','smithy','wheelwright','boilermaker','coachbuilder','mechanic'];
+          const choice = valid.includes(sub2 || '') ? (sub2 as any) : null;
+          if (choice) {
+            // Destructive role switch for Tier 4: lose progress/upgrades for current role
+            (user as any).role4 = choice;
+            // Reset all T4 automations and rates for the user (no refunds)
+            (user as any).automation4 = { wh1:0, wh2:0, wh3:0, wh4:0, wh5:0, bl1:0, bl2:0, bl3:0, bl4:0, bl5:0, cb1:0, cb2:0, cb3:0, cb4:0, cb5:0, lj1:0, lj2:0, lj3:0, lj4:0, lj5:0, sm1:0, sm2:0, sm3:0, sm4:0, sm5:0, ta1:0, ta2:0, ta3:0, ta4:0, ta5:0 };
+            (user as any).rates.woodPerSec = 0;
+            (user as any).rates.steelPerSec = 0;
+            (user as any).rates.wheelsPerSec = 0;
+            (user as any).rates.boilersPerSec = 0;
+            (user as any).rates.cabinsPerSec = 0;
+            (user as any).rates.trainsPerSec = 0;
+            // Reset passive toggles to defaults (enabled for consumers)
+            (user as any).wheelPassiveEnabled = true;
+            (user as any).boilerPassiveEnabled = true;
+            (user as any).coachPassiveEnabled = true;
+            (user as any).mechPassiveEnabled = true;
+          }
+        } else if (action === 't4' && sub === 'cancel') {
+          // no-op, just re-render current state
         } else if (action === 't3' && sub === 'weldtoggle') {
           if (sub2 === 'on') {
             (user as any).weldPassiveEnabled = true;
@@ -898,6 +930,11 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       });
 
         {
+          // If requested, refresh shared inventory from all users and re-render
+          if (doGlobalRefresh) {
+            try { await refreshGuildContributions(guildId); } catch (e) { console.error('button refresh failed:', e); }
+            await withGuildAndUser(guildId, userId, (g, u) => { view = renderTycoon(g, u); return null; });
+          }
           // Apply deferred mass updates now that the guild/user write is finished
           if (doPauseT3Consumers) {
             try {

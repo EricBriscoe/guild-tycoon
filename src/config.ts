@@ -124,7 +124,7 @@ export const AUTOMATION_T4_SMITHY = {
   sm2: { key: 'sm2', name: 'Anvil Station', baseRate: 1.2, baseCost: 48,   growth: 1.16 },
   sm3: { key: 'sm3', name: 'Quench Tank',   baseRate: 2.4, baseCost: 192,  growth: 1.18 },
   sm4: { key: 'sm4', name: 'Power Hammer',  baseRate: 4.8, baseCost: 768,  growth: 1.2 },
-  sm5: { key: 'sm5', name: 'Blast Furnace', baseRate: 9.6, baseCost: 3072, growth: 1.22 }
+  sm5: { key: 'sm5', name: 'Giga Furnace', baseRate: 9.6, baseCost: 3072, growth: 1.22 }
 } as const;
 export const AUTOMATION_T4_MECHANIC = {
   ta1: { key: 'ta1', name: 'Assembly Jig',  baseRate: 0.2, baseCost: 4,    growth: 1.15 },
