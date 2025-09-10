@@ -1,6 +1,7 @@
 // Core game math and metadata for Tier 1 (sticks)
 import {
   GAME_TIMING,
+  TIER_GOALS,
   TIER_3_RECIPES,
   TIER_4_RECIPES,
   PRODUCTION_SURPLUS,
@@ -427,25 +428,23 @@ export function advanceTierIfReady(guild: Guild): { tierUp: boolean } {
   if (currentTier === 1 && guild.tierProgress >= guild.tierGoal) {
     (guild as any).widgetTier = 2;
     guild.tierProgress = 0;
-    guild.tierGoal = guild.tierGoal * 10; // Tier 2 takes 10x time
+    guild.tierGoal = TIER_GOALS.TIER_2;
     return { tierUp: true };
   } else if (currentTier === 2 && guild.tierProgress >= guild.tierGoal) {
     (guild as any).widgetTier = 3;
     guild.tierProgress = 0;
-    // Tier 3 approximately twice as long as Tier 2
-    guild.tierGoal = (guild.tierGoal || 10000000) * 2;
+    guild.tierGoal = TIER_GOALS.TIER_3;
     return { tierUp: true };
   } else if (currentTier === 3 && guild.tierProgress >= guild.tierGoal) {
     (guild as any).widgetTier = 4;
     guild.tierProgress = 0;
-    // Tier 4 goal: 100 million trains
-    guild.tierGoal = 100_000_000;
+    guild.tierGoal = TIER_GOALS.TIER_4;
     return { tierUp: true };
   } else if (currentTier === 4 && guild.tierProgress >= guild.tierGoal) {
     // Prestige: reset to tier 1 but add prestige point
     (guild as any).widgetTier = 1;
     guild.tierProgress = 0;
-    guild.tierGoal = 1_000_000; // Reset to original tier 1 goal
+    guild.tierGoal = TIER_GOALS.TIER_1;
     (guild as any).prestigePoints = ((guild as any).prestigePoints || 0) + 1;
     return { tierUp: true };
   }

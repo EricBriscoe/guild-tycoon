@@ -110,7 +110,16 @@ export function renderTycoon(guild: Guild, user: User) {
     }
 
     // Role is chosen
-    const rateForRole = (r: string) => (r === 'lumberjack' ? (user as any).rates?.woodPerSec : r === 'smithy' ? (user as any).rates?.steelPerSec : r === 'wheelwright' ? (user as any).rates?.wheelsPerSec : r === 'boilermaker' ? (user as any).rates?.boilersPerSec : r === 'coachbuilder' ? (user as any).rates?.cabinsPerSec : (user as any).rates?.trainsPerSec) || 0;
+    const rateForRole = (r: string) => {
+      // Show effective rate (0 if passive is disabled for consumer roles)
+      if (r === 'wheelwright') return ((user as any).wheelPassiveEnabled === false) ? 0 : ((user as any).rates?.wheelsPerSec || 0);
+      if (r === 'boilermaker') return ((user as any).boilerPassiveEnabled === false) ? 0 : ((user as any).rates?.boilersPerSec || 0);
+      if (r === 'coachbuilder') return ((user as any).coachPassiveEnabled === false) ? 0 : ((user as any).rates?.cabinsPerSec || 0);
+      if (r === 'mechanic') return ((user as any).mechPassiveEnabled === false) ? 0 : ((user as any).rates?.trainsPerSec || 0);
+      if (r === 'lumberjack') return (user as any).rates?.woodPerSec || 0;
+      if (r === 'smithy') return (user as any).rates?.steelPerSec || 0;
+      return 0;
+    };
     const roleActionLabel = (r: string) => r === 'lumberjack' ? 'Chop' : r === 'smithy' ? 'Forge' : r === 'wheelwright' ? 'Craft' : r === 'boilermaker' ? 'Build' : r === 'coachbuilder' ? 'Carve' : 'Assemble';
     const unitLabel = (r: string) => r === 'lumberjack' ? 'wood' : r === 'smithy' ? 'steel' : r === 'wheelwright' ? 'wheels' : r === 'boilermaker' ? 'boilers' : r === 'coachbuilder' ? 'cabins' : 'trains';
     let productionToggle: any = null;
@@ -185,6 +194,11 @@ export function renderTycoon(guild: Guild, user: User) {
           .setDisabled(!canBuyClick)
           .setLabel(isMax4 ? 'Maxed' : 'Buy Upgrade')
       );
+
+    // Single Switch Roles button (opens selector view)
+    const switchRolesSection = new SectionBuilder()
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent('Role Management'))
+      .setButtonAccessory(new ButtonBuilder().setCustomId('tycoon:t4:switch').setStyle(ButtonStyle.Secondary).setLabel('Switch Roles'));
 
     // Automation sections per role
     const inv = (guild as any).inventory || {};
@@ -268,6 +282,7 @@ export function renderTycoon(guild: Guild, user: User) {
       .addTextDisplayComponents(header)
       .addSectionComponents(
         playerRole,
+        switchRolesSection,
         ...(productionToggle ? [productionToggle] : []),
         ...(resourceControl ? [resourceControl] : []),
         refreshSection,
@@ -952,7 +967,7 @@ export function renderLeaderboard(
           )
         )
         .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
-    } else {
+    } else if (tier === 3) {
       const role = (selectedUser as any).role3 || null;
       const a3 = (selectedUser as any).automation3 || {};
       const rate = role === 'forger' ? ((selectedUser as any).rates?.pipesPerSec || 0) : ((selectedUser as any).rates?.boxesPerSec || 0);
@@ -963,6 +978,37 @@ export function renderLeaderboard(
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
             `## Inspect: <@${selectedUserId}> — ${role ? role[0].toUpperCase() + role.slice(1) : 'Unassigned'}\n`+
+            `Rate: ${rateFmt(rate)}/s\n${list}`
+          )
+        )
+        .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
+    } else if (tier === 4) {
+      const role4 = (selectedUser as any).role4 || null;
+      const a4 = (selectedUser as any).automation4 || {};
+      const rate = role4 === 'lumberjack' ? ((selectedUser as any).rates?.woodPerSec || 0)
+                  : role4 === 'smithy' ? ((selectedUser as any).rates?.steelPerSec || 0)
+                  : role4 === 'wheelwright' ? ((selectedUser as any).rates?.wheelsPerSec || 0)
+                  : role4 === 'boilermaker' ? ((selectedUser as any).rates?.boilersPerSec || 0)
+                  : role4 === 'coachbuilder' ? ((selectedUser as any).rates?.cabinsPerSec || 0)
+                  : ((selectedUser as any).rates?.trainsPerSec || 0);
+      let list = '';
+      if (role4 === 'lumberjack') {
+        list = `• Hand Axe: ${a4.lj1 || 0}\n• Crosscut Saw: ${a4.lj2 || 0}\n• Felling Wedge: ${a4.lj3 || 0}\n• Logging Crane: ${a4.lj4 || 0}\n• Tree Processor: ${a4.lj5 || 0}`;
+      } else if (role4 === 'smithy') {
+        list = `• Forge Bellows: ${a4.sm1 || 0}\n• Anvil Station: ${a4.sm2 || 0}\n• Quench Tank: ${a4.sm3 || 0}\n• Power Hammer: ${a4.sm4 || 0}\n• Blast Furnace: ${a4.sm5 || 0}`;
+      } else if (role4 === 'wheelwright') {
+        list = `• Spoke Shop: ${a4.wh1 || 0}\n• Lathe Line: ${a4.wh2 || 0}\n• Press Form: ${a4.wh3 || 0}\n• Rim Forge: ${a4.wh4 || 0}\n• Balancing Rig: ${a4.wh5 || 0}`;
+      } else if (role4 === 'boilermaker') {
+        list = `• Tube Rack: ${a4.bl1 || 0}\n• Sheet Roller: ${a4.bl2 || 0}\n• Shell Welder: ${a4.bl3 || 0}\n• Rivet Station: ${a4.bl4 || 0}\n• Pressure Tester: ${a4.bl5 || 0}`;
+      } else if (role4 === 'coachbuilder') {
+        list = `• Carpentry Bench: ${a4.cb1 || 0}\n• Upholstery Line: ${a4.cb2 || 0}\n• Panel Bender: ${a4.cb3 || 0}\n• Paint Booth: ${a4.cb4 || 0}\n• Finishing Line: ${a4.cb5 || 0}`;
+      } else if (role4 === 'mechanic') {
+        list = `• Assembly Jig: ${a4.ta1 || 0}\n• Coupling Tools: ${a4.ta2 || 0}\n• Hydraulic Lift: ${a4.ta3 || 0}\n• Rolling Crane: ${a4.ta4 || 0}\n• Assembly Line: ${a4.ta5 || 0}`;
+      }
+      inspect = new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `## Inspect: <@${selectedUserId}> — ${role4 ? role4[0].toUpperCase() + role4.slice(1) : 'Unassigned'}\n`+
             `Rate: ${rateFmt(rate)}/s\n${list}`
           )
         )
@@ -1049,4 +1095,32 @@ export function renderRoleSwitchConfirm(guild: Guild, user: User, targetRole: 'f
     .addSectionComponents(confirmSection, cancelSection);
 
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
+}
+
+// Confirmation UI for switching Tier 4 role (non-destructive)
+export function renderRoleSwitchSelectorT4(guild: Guild, user: User) {
+  const header = new TextDisplayBuilder().setContent('# Switch Tier 4 Role');
+  const warning = new TextDisplayBuilder().setContent(
+    '**Warning:** Switching roles will reset all of your Tier 4 progress and upgrades for your current role. You will not be refunded.'
+  );
+  const roles: Array<{ key: any; label: string; emoji: string }> = [
+    { key: 'lumberjack', label: 'Lumberjack', emoji: '🌲' },
+    { key: 'smithy', label: 'Smithy', emoji: '⚒️' },
+    { key: 'wheelwright', label: 'Wheelwright', emoji: '🛞' },
+    { key: 'boilermaker', label: 'Boilermaker', emoji: '🔥' },
+    { key: 'coachbuilder', label: 'Coachbuilder', emoji: '🚃' },
+    { key: 'mechanic', label: 'Mechanic', emoji: '🚂' },
+  ];
+  const roleSections = roles.map(r => new SectionBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`${r.emoji} ${r.label}`))
+    .setButtonAccessory(new ButtonBuilder().setCustomId(`tycoon:t4:confirm:${r.key}`).setStyle(ButtonStyle.Danger).setLabel(`Switch to ${r.label}`))
+  );
+  const cancel = new SectionBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('Cancel'))
+    .setButtonAccessory(new ButtonBuilder().setCustomId('tycoon:t4:cancel').setStyle(ButtonStyle.Secondary).setLabel('Cancel'));
+  const container = new ContainerBuilder()
+    .setAccentColor(0xe67e22)
+    .addTextDisplayComponents(header, warning)
+    .addSectionComponents(...roleSections, cancel);
+  return { components: [container], flags: (MessageFlags as any).IsComponentsV2 };
 }
