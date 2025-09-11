@@ -639,7 +639,15 @@ export async function getAllT4UsersProduction(guildId: string): Promise<Array<{ 
            COALESCE(boilers_produced, 0) AS "boilersProduced",
            COALESCE(cabins_produced, 0) AS "cabinsProduced",
            COALESCE(trains_produced, 0) AS "trainsProduced"
-     FROM tier4_users WHERE guild_id = ?`,
+     FROM tier4_users WHERE guild_id = ?
+     ORDER BY (
+       COALESCE(wood_produced, 0) +
+       COALESCE(steel_produced, 0) +
+       COALESCE(wheels_produced, 0) +
+       COALESCE(boilers_produced, 0) +
+       COALESCE(cabins_produced, 0) +
+       COALESCE(trains_produced, 0)
+     ) DESC, user_id`,
     guildId
   );
   return rows as any;
