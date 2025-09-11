@@ -92,39 +92,39 @@ export const AUTOMATION_T3_WELD = {
 
 // Tier 4 automation (wood, steel, wheels, boilers, cabins, trains)
 export const AUTOMATION_T4_WHEEL = {
-  wh1: { key: 'wh1', name: 'Spoke Shop',   baseRate: 0.5, baseCost: 10,   growth: 1.15 },
-  wh2: { key: 'wh2', name: 'Lathe Line',   baseRate: 1.0, baseCost: 40,   growth: 1.16 },
-  wh3: { key: 'wh3', name: 'Press Form',   baseRate: 2.0, baseCost: 160,  growth: 1.18 },
-  wh4: { key: 'wh4', name: 'Rim Forge',    baseRate: 4.0, baseCost: 640,  growth: 1.2 },
-  wh5: { key: 'wh5', name: 'Balancing Rig',baseRate: 8.0, baseCost: 2560, growth: 1.22 }
+  wh1: { key: 'wh1', name: 'Spoke Shop',   baseRate: 0.5, baseCost: 10,   growth: 1.14 },
+  wh2: { key: 'wh2', name: 'Lathe Line',   baseRate: 1.0, baseCost: 40,   growth: 1.15 },
+  wh3: { key: 'wh3', name: 'Press Form',   baseRate: 2.0, baseCost: 160,  growth: 1.17 },
+  wh4: { key: 'wh4', name: 'Rim Forge',    baseRate: 4.0, baseCost: 640,  growth: 1.19 },
+  wh5: { key: 'wh5', name: 'Balancing Rig',baseRate: 8.0, baseCost: 2560, growth: 1.21 }
 } as const;
 export const AUTOMATION_T4_BOILER = {
-  bl1: { key: 'bl1', name: 'Tube Rack',     baseRate: 0.4, baseCost: 8,    growth: 1.15 },
-  bl2: { key: 'bl2', name: 'Sheet Roller',  baseRate: 0.8, baseCost: 32,   growth: 1.16 },
-  bl3: { key: 'bl3', name: 'Shell Welder',  baseRate: 1.6, baseCost: 128,  growth: 1.18 },
-  bl4: { key: 'bl4', name: 'Rivet Station', baseRate: 3.2, baseCost: 512,  growth: 1.2 },
-  bl5: { key: 'bl5', name: 'Pressure Tester', baseRate: 6.4, baseCost: 2048, growth: 1.22 }
+  bl1: { key: 'bl1', name: 'Tube Rack',     baseRate: 0.4, baseCost: 8,    growth: 1.14 },
+  bl2: { key: 'bl2', name: 'Sheet Roller',  baseRate: 0.8, baseCost: 32,   growth: 1.15 },
+  bl3: { key: 'bl3', name: 'Shell Welder',  baseRate: 1.6, baseCost: 128,  growth: 1.17 },
+  bl4: { key: 'bl4', name: 'Rivet Station', baseRate: 3.2, baseCost: 512,  growth: 1.19 },
+  bl5: { key: 'bl5', name: 'Pressure Tester', baseRate: 6.4, baseCost: 2048, growth: 1.21 }
 } as const;
 export const AUTOMATION_T4_COACH = {
-  cb1: { key: 'cb1', name: 'Carpentry Bench', baseRate: 0.3, baseCost: 6,    growth: 1.15 },
-  cb2: { key: 'cb2', name: 'Upholstery Line', baseRate: 0.6, baseCost: 24,   growth: 1.16 },
-  cb3: { key: 'cb3', name: 'Panel Bender',    baseRate: 1.2, baseCost: 96,   growth: 1.18 },
-  cb4: { key: 'cb4', name: 'Paint Booth',     baseRate: 2.4, baseCost: 384,  growth: 1.2 },
-  cb5: { key: 'cb5', name: 'Finishing Line',  baseRate: 4.8, baseCost: 1536, growth: 1.22 }
+  cb1: { key: 'cb1', name: 'Carpentry Bench', baseRate: 0.3, baseCost: 6,    growth: 1.14 },
+  cb2: { key: 'cb2', name: 'Upholstery Line', baseRate: 0.6, baseCost: 24,   growth: 1.15 },
+  cb3: { key: 'cb3', name: 'Panel Bender',    baseRate: 1.2, baseCost: 96,   growth: 1.17 },
+  cb4: { key: 'cb4', name: 'Paint Booth',     baseRate: 2.4, baseCost: 384,  growth: 1.19 },
+  cb5: { key: 'cb5', name: 'Finishing Line',  baseRate: 4.8, baseCost: 1536, growth: 1.21 }
 } as const;
 export const AUTOMATION_T4_LUMBERJACK = {
-  lj1: { key: 'lj1', name: 'Hand Axe',      baseRate: 0.8,  baseCost: 16,    growth: 1.15 },
-  lj2: { key: 'lj2', name: 'Crosscut Saw',  baseRate: 1.6,  baseCost: 64,    growth: 1.16 },
-  lj3: { key: 'lj3', name: 'Felling Wedge', baseRate: 3.2,  baseCost: 256,   growth: 1.18 },
-  lj4: { key: 'lj4', name: 'Logging Crane', baseRate: 6.4,  baseCost: 1024,  growth: 1.2 },
-  lj5: { key: 'lj5', name: 'Tree Processor',baseRate: 12.8, baseCost: 4096,  growth: 1.22 }
+  lj1: { key: 'lj1', name: 'Basic Axe',      baseRate: 0.8,  baseCost: 16,    growth: 1.13 },
+  lj2: { key: 'lj2', name: 'Crosscut Saw',  baseRate: 1.6,  baseCost: 64,    growth: 1.14 },
+  lj3: { key: 'lj3', name: 'Titanium Axe', baseRate: 3.2,  baseCost: 256,   growth: 1.16 },
+  lj4: { key: 'lj4', name: 'Logging Crane', baseRate: 6.4,  baseCost: 1024,  growth: 1.18 },
+  lj5: { key: 'lj5', name: 'Tree Processor',baseRate: 12.8, baseCost: 4096,  growth: 1.20 }
 } as const;
 export const AUTOMATION_T4_SMITHY = {
-  sm1: { key: 'sm1', name: 'Forge Bellows', baseRate: 0.6, baseCost: 12,   growth: 1.15 },
-  sm2: { key: 'sm2', name: 'Anvil Station', baseRate: 1.2, baseCost: 48,   growth: 1.16 },
-  sm3: { key: 'sm3', name: 'Quench Tank',   baseRate: 2.4, baseCost: 192,  growth: 1.18 },
-  sm4: { key: 'sm4', name: 'Power Hammer',  baseRate: 4.8, baseCost: 768,  growth: 1.2 },
-  sm5: { key: 'sm5', name: 'Giga Furnace', baseRate: 9.6, baseCost: 3072, growth: 1.22 }
+  sm1: { key: 'sm1', name: 'Forge Bellows', baseRate: 0.6, baseCost: 12,   growth: 1.13 },
+  sm2: { key: 'sm2', name: 'Anvil Station', baseRate: 1.2, baseCost: 48,   growth: 1.14 },
+  sm3: { key: 'sm3', name: 'Quench Tank',   baseRate: 2.4, baseCost: 192,  growth: 1.16 },
+  sm4: { key: 'sm4', name: 'Power Hammer',  baseRate: 4.8, baseCost: 768,  growth: 1.18 },
+  sm5: { key: 'sm5', name: 'Giga Furnace', baseRate: 9.6, baseCost: 3072, growth: 1.20 }
 } as const;
 export const AUTOMATION_T4_MECHANIC = {
   ta1: { key: 'ta1', name: 'Assembly Jig',  baseRate: 0.2, baseCost: 4,    growth: 1.15 },
