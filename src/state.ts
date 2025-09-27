@@ -3,7 +3,7 @@ import path from 'node:path';
 import { PoolClient } from 'pg';
 import { exec, qAll, qAllTx, qOne, qOneTx, qRun, qRunTx, transaction } from './db.js';
 import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX, T4_WOOD_PER_WHEEL, T4_STEEL_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
-import { TIER_GOALS } from './config.js';
+import { TIER_GOALS, computeTierGoal } from './config.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 
@@ -23,8 +23,9 @@ function defaultGuildState(guildId: string): GuildState {
     createdAt: Date.now(),
     widgetTier: 1,
     tierProgress: 0,
-    tierGoal: TIER_GOALS.TIER_1,
-    totals: { sticks: 0, beams: 0 }
+    tierGoal: computeTierGoal(1, 0),
+    totals: { sticks: 0, beams: 0 },
+    prestigePoints: 0
   };
 }
 
@@ -335,15 +336,18 @@ async function loadGuildTx(client: PoolClient, guildId: string): Promise<GuildSt
   const t3: any = await qOneTx(client, `SELECT tier_progress, tier_goal, inv_pipes, inv_boxes, total_pipes, total_boxes, forger_click_level, welder_click_level FROM tier3_guild WHERE guild_id = ?`, guildId);
   const t4: any = await qOneTx(client, `SELECT tier_progress, tier_goal, inv_wheels, inv_boilers, inv_cabins, inv_trains, inv_wood, inv_steel, total_wheels, total_boilers, total_cabins, total_trains, total_wood, total_steel, wheel_click_level, boiler_click_level, coach_click_level, lumber_click_level, smith_click_level, mech_click_level FROM tier4_guild WHERE guild_id = ?`, guildId);
   const currentTier = row.widget_tier || 1;
+  const prestigePoints = Number(row.prestige_points) || 0;
   // Coerce BIGINT columns returned as strings into numbers where appropriate
   const createdAtNum: number = Number(row.created_at) || Date.now();
+  const activeTierGoal = computeTierGoal(currentTier === 1 ? 1 : currentTier === 2 ? 2 : currentTier === 3 ? 3 : 4, prestigePoints);
+  const activeTierProgress = currentTier === 1 ? (t1?.tier_progress || 0) : currentTier === 2 ? (t2?.tier_progress || 0) : currentTier === 3 ? (t3?.tier_progress || 0) : (t4?.tier_progress || 0);
   return {
     id: row.id,
     createdAt: createdAtNum,
     widgetTier: currentTier,
-    tierProgress: currentTier === 1 ? (t1?.tier_progress || 0) : currentTier === 2 ? (t2?.tier_progress || 0) : currentTier === 3 ? (t3?.tier_progress || 0) : (t4?.tier_progress || 0),
-    // Use config.ts as the source of truth for tier goals
-    tierGoal: currentTier === 1 ? TIER_GOALS.TIER_1 : currentTier === 2 ? TIER_GOALS.TIER_2 : currentTier === 3 ? TIER_GOALS.TIER_3 : TIER_GOALS.TIER_4,
+    tierProgress: Math.min(activeTierGoal, activeTierProgress),
+    // Use config.ts base goals scaled by prestige as the source of truth
+    tierGoal: activeTierGoal,
     totals: { sticks: t1?.total_sticks || 0, beams: t2?.total_beams || 0, pipes: t3?.total_pipes || 0, boxes: t3?.total_boxes || 0, wood: t4?.total_wood || 0, steel: t4?.total_steel || 0, wheels: t4?.total_wheels || 0, boilers: t4?.total_boilers || 0, cabins: t4?.total_cabins || 0, trains: t4?.total_trains || 0 },
     inventory: { sticks: t1?.inv_sticks || 0, beams: t2?.inv_beams || 0, pipes: t3?.inv_pipes || 0, boxes: t3?.inv_boxes || 0, wood: t4?.inv_wood || 0, steel: t4?.inv_steel || 0, wheels: t4?.inv_wheels || 0, boilers: t4?.inv_boilers || 0, cabins: t4?.inv_cabins || 0, trains: t4?.inv_trains || 0 },
     axeLevel: t1?.axe_level || 0,
@@ -356,7 +360,7 @@ async function loadGuildTx(client: PoolClient, guildId: string): Promise<GuildSt
     t4LumberjackClickLevel: t4?.lumber_click_level || 0,
     t4SmithyClickLevel: t4?.smith_click_level || 0,
     t4MechanicClickLevel: t4?.mech_click_level || 0,
-    prestigePoints: row.prestige_points || 0
+    prestigePoints
   };
 }
 

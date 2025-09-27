@@ -1,7 +1,7 @@
 // Core game math and metadata for Tier 1 (sticks)
 import {
   GAME_TIMING,
-  TIER_GOALS,
+  computeTierGoal,
   TIER_3_RECIPES,
   TIER_4_RECIPES,
   PRODUCTION_SURPLUS,
@@ -425,27 +425,29 @@ export function applyGuildProgress(guild: Guild, added: number, tier: number): {
 // Supports advancing 1->2, 2->3, 3->4, and 4->prestige when progress goal is met.
 export function advanceTierIfReady(guild: Guild): { tierUp: boolean } {
   const currentTier = (guild as any).widgetTier || 1;
+  const prestigePoints = (guild as any).prestigePoints || 0;
   if (currentTier === 1 && guild.tierProgress >= guild.tierGoal) {
     (guild as any).widgetTier = 2;
     guild.tierProgress = 0;
-    guild.tierGoal = TIER_GOALS.TIER_2;
+    guild.tierGoal = computeTierGoal(2, prestigePoints);
     return { tierUp: true };
   } else if (currentTier === 2 && guild.tierProgress >= guild.tierGoal) {
     (guild as any).widgetTier = 3;
     guild.tierProgress = 0;
-    guild.tierGoal = TIER_GOALS.TIER_3;
+    guild.tierGoal = computeTierGoal(3, prestigePoints);
     return { tierUp: true };
   } else if (currentTier === 3 && guild.tierProgress >= guild.tierGoal) {
     (guild as any).widgetTier = 4;
     guild.tierProgress = 0;
-    guild.tierGoal = TIER_GOALS.TIER_4;
+    guild.tierGoal = computeTierGoal(4, prestigePoints);
     return { tierUp: true };
   } else if (currentTier === 4 && guild.tierProgress >= guild.tierGoal) {
     // Prestige: reset to tier 1 but add prestige point
+    const updatedPrestige = prestigePoints + 1;
+    (guild as any).prestigePoints = updatedPrestige;
     (guild as any).widgetTier = 1;
     guild.tierProgress = 0;
-    guild.tierGoal = TIER_GOALS.TIER_1;
-    (guild as any).prestigePoints = ((guild as any).prestigePoints || 0) + 1;
+    guild.tierGoal = computeTierGoal(1, updatedPrestige);
     return { tierUp: true };
   }
   return { tierUp: false };
@@ -709,7 +711,7 @@ export function resetGuildForPrestige(guild: Guild): void {
   // Reset tier and progress
   (guild as any).widgetTier = 1;
   guild.tierProgress = 0;
-  guild.tierGoal = 1_000_000;
+  guild.tierGoal = computeTierGoal(1, (guild as any).prestigePoints || 0);
   
   // Reset all totals but keep prestige points
   guild.totals = { sticks: 0, beams: 0, pipes: 0, boxes: 0, wood: 0, steel: 0, wheels: 0, boilers: 0, cabins: 0, trains: 0 };

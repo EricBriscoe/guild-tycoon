@@ -19,6 +19,23 @@ export const TIER_GOALS = {
   TIER_4: 100_000_000,  // 100M trains
 } as const;
 
+export const PRESTIGE_TIER_GOAL_MULTIPLIER = 1.1;
+
+export type TierNumber = 1 | 2 | 3 | 4;
+
+export function computeTierGoal(tier: TierNumber, prestigePoints: number = 0): number {
+  const sanitizedPrestige = Math.max(0, prestigePoints);
+  const base = tier === 1
+    ? TIER_GOALS.TIER_1
+    : tier === 2
+      ? TIER_GOALS.TIER_2
+      : tier === 3
+        ? TIER_GOALS.TIER_3
+        : TIER_GOALS.TIER_4;
+  const scaled = base * Math.pow(PRESTIGE_TIER_GOAL_MULTIPLIER, sanitizedPrestige);
+  return Math.round(scaled);
+}
+
 // Tier 3 Recipe Constants
 export const TIER_3_RECIPES = {
   PIPES_PER_BOX: 6, // 6 pipes needed to make 1 box
