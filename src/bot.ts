@@ -306,35 +306,49 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             const ids = await getUsersByRoleT4(guildId, role as any);
             for (const uid of ids) {
               await withGuildAndUser(guildId, uid, (g, u) => {
-                const rateKey = role === 'lumberjack' ? 'woodPerSec'
-                  : role === 'smithy' ? 'steelPerSec'
-                  : role === 'wheelwright' ? 'wheelsPerSec'
-                  : role === 'boilermaker' ? 'boilersPerSec'
-                  : role === 'coachbuilder' ? 'cabinsPerSec'
+                // Determine passive toggle for consumer roles
+                const role4 = role as any;
+                const passives = {
+                  wheelwright: (u as any).wheelPassiveEnabled !== false,
+                  boilermaker: (u as any).boilerPassiveEnabled !== false,
+                  coachbuilder: (u as any).coachPassiveEnabled !== false,
+                  mechanic: (u as any).mechPassiveEnabled !== false
+                } as any;
+                const rateKey = role4 === 'lumberjack' ? 'woodPerSec'
+                  : role4 === 'smithy' ? 'steelPerSec'
+                  : role4 === 'wheelwright' ? 'wheelsPerSec'
+                  : role4 === 'boilermaker' ? 'boilersPerSec'
+                  : role4 === 'coachbuilder' ? 'cabinsPerSec'
                   : 'trainsPerSec';
                 const rate = (u as any).rates?.[rateKey] || 0;
-                if (rate > 0) {
-                  if (role === 'wheelwright') {
+                const consumerPassiveOn = role4 === 'wheelwright' ? passives.wheelwright
+                  : role4 === 'boilermaker' ? passives.boilermaker
+                  : role4 === 'coachbuilder' ? passives.coachbuilder
+                  : role4 === 'mechanic' ? passives.mechanic
+                  : true; // producers always on
+
+                if (!consumerPassiveOn || rate <= 0) {
+                  inactive.push(`<@${uid}>`);
+                } else {
+                  if (role4 === 'wheelwright') {
                     const steel = rate * T4_STEEL_PER_WHEEL;
                     const wood = rate * T4_WOOD_PER_WHEEL;
                     active.push(`<@${uid}> (${rf(steel)} steel/s, ${rf(wood)} wood/s)`);
-                  } else if (role === 'boilermaker') {
+                  } else if (role4 === 'boilermaker') {
                     const steel = rate * T4_STEEL_PER_BOILER;
                     active.push(`<@${uid}> (${rf(steel)} steel/s)`);
-                  } else if (role === 'coachbuilder') {
+                  } else if (role4 === 'coachbuilder') {
                     const wood = rate * T4_WOOD_PER_CABIN;
                     active.push(`<@${uid}> (${rf(wood)} wood/s)`);
-                  } else if (role === 'mechanic') {
+                  } else if (role4 === 'mechanic') {
                     const wheels = rate * T4_WHEELS_PER_TRAIN;
                     const boilers = rate * T4_BOILERS_PER_TRAIN;
                     const cabins = rate * T4_CABINS_PER_TRAIN;
                     active.push(`<@${uid}> (${rf(wheels)} wheels/s, ${rf(boilers)} boilers/s, ${rf(cabins)} cabins/s)`);
                   } else {
-                    // lumberjack/smithy don't consume inputs; just list as active
+                    // lumberjack/smithy: list as active if rate > 0
                     active.push(`<@${uid}>`);
                   }
-                } else {
-                  inactive.push(`<@${uid}>`);
                 }
                 return null;
               });
