@@ -856,10 +856,25 @@ export function renderTycoon(guild: Guild, user: User) {
 }
 
 // Leaderboard render for /top with user-inspect panel
+const roiFmt = (n: number): string => {
+  if (!isFinite(n) || n <= 0) return '0.00';
+  if (n >= 100) return n.toFixed(0);
+  if (n >= 10) return n.toFixed(1);
+  return n.toFixed(2);
+};
+
+const roiBar = (current: number, max: number, width: number = 18): string => {
+  const cappedMax = Math.max(1e-6, max);
+  const ratio = Math.max(0, Math.min(1, current / cappedMax));
+  const filled = Math.round(ratio * width);
+  const empty = width - filled;
+  return '█'.repeat(filled) + '░'.repeat(empty) + ` ROI ${roiFmt(current)}/${roiFmt(cappedMax)}`;
+};
+
 export function renderLeaderboard(
   guild: Guild,
   tier: number,
-  top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder' | 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'; produced?: number }>,
+  top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder' | 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'; produced?: number; invested?: number; roi?: number }>,
   selectedUserId?: string,
   selectedUser?: User,
   options?: { 
@@ -869,9 +884,12 @@ export function renderLeaderboard(
     roleTotals?: Record<string, number>;
     viewerRole?: string | null;
     viewerProduced?: number;
+    viewerInvested?: number;
+    viewerRoi?: number;
   }
 ) {
-  const headerTitle = 'Top Contributors';
+  const isEfficiencyTier = tier === 3 || tier === 4;
+  const headerTitle = isEfficiencyTier ? 'Top Efficiency' : 'Top Contributors';
   const MAX_ROWS = 4; // keep total component count well under 40
   top = top.slice(0, MAX_ROWS);
   const header = new TextDisplayBuilder()
@@ -881,27 +899,34 @@ export function renderLeaderboard(
   const totalContributions = top.reduce((sum, t) => sum + t.contributed, 0);
   // Full-guild totals by role for Tier 3/4, provided by caller (required for accurate %)
   const totalsByRole: Record<string, number> = options?.roleTotals || {};
+  const maxRoi = top.reduce((acc, row) => Math.max(acc, row.roi || 0), 0);
   
   const medalIcon = (i: number) => (i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '');
   for (let i = 0; i < top.length; i++) {
     const row = top[i];
     const isSelected = row.userId === selectedUserId;
     
-    let displayValue: number, totalForPercentage: number, valueLabel: string;
-    if ((tier === 3 || tier === 4) && (row as any).role) {
-      // Show production data for Tier 3/4 with role-based totals
-      displayValue = (row as any).produced || 0;
+    let displayValue: number, totalForPercentage: number, valueLabel: string, extraLine = '';
+    if (isEfficiencyTier && (row as any).role) {
+      // Show ROI data for Tier 3/4
       const userRole = (row as any).role as string;
-      totalForPercentage = (totalsByRole[userRole] ?? 0);
-      if (userRole === 'forger') valueLabel = 'pipes';
-      else if (userRole === 'welder') valueLabel = 'boxes';
-      else if (userRole === 'lumberjack') valueLabel = 'wood';
-      else if (userRole === 'smithy') valueLabel = 'steel';
-      else if (userRole === 'wheelwright') valueLabel = 'wheels';
-      else if (userRole === 'boilermaker') valueLabel = 'boilers';
-      else if (userRole === 'coachbuilder') valueLabel = 'cabins';
-      else if (userRole === 'mechanic') valueLabel = 'trains';
-      else valueLabel = '';
+      const produced = (row as any).produced || 0;
+      const invested = (row as any).invested || 0;
+      const roi = (row as any).roi || 0;
+      displayValue = roi;
+      totalForPercentage = Math.max(1, maxRoi);
+      valueLabel = 'ROI';
+      const unit = userRole === 'forger' ? 'pipes'
+        : userRole === 'welder' ? 'boxes'
+        : userRole === 'lumberjack' ? 'wood'
+        : userRole === 'smithy' ? 'steel'
+        : userRole === 'wheelwright' ? 'wheels'
+        : userRole === 'boilermaker' ? 'boilers'
+        : userRole === 'coachbuilder' ? 'cabins'
+        : userRole === 'mechanic' ? 'trains'
+        : '';
+      const spentUnit = unit === 'pipes' || unit === 'boxes' ? unit : (userRole === 'mechanic' ? 'parts' : unit || 'resources');
+      extraLine = `ROI: ${roiFmt(roi)} • Output: ${fmt(produced)}${unit ? ' ' + unit : ''} • Spent: ${fmt(invested)} ${spentUnit}`;
     } else {
       // Show contribution data for Tier 1 & 2
       displayValue = row.contributed;
@@ -909,8 +934,10 @@ export function renderLeaderboard(
       valueLabel = '';
     }
     
-    const bar = progressBar(displayValue, Math.max(1, totalForPercentage), 18);
-    const roleIcon = (tier === 3 || tier === 4) && (row as any).role
+    const bar = (isEfficiencyTier && (row as any).role)
+      ? roiBar(displayValue, Math.max(1e-6, maxRoi), 18)
+      : progressBar(displayValue, Math.max(1, totalForPercentage), 18);
+    const roleIcon = isEfficiencyTier && (row as any).role
       ? ((row as any).role === 'forger' ? '🔧 '
         : (row as any).role === 'welder' ? '🔩 '
         : (row as any).role === 'lumberjack' ? '🌲 '
@@ -921,10 +948,11 @@ export function renderLeaderboard(
         : (row as any).role === 'mechanic' ? '🚂 ' : '')
       : '';
     const prefix = `${medalIcon(i)}${i + 1}.`;
-    const title = `${prefix} ${roleIcon}<@${row.userId}> — ${fmt(displayValue)}${valueLabel ? ' ' + valueLabel : ''}`;
+    const title = `${prefix} ${roleIcon}<@${row.userId}> — ${valueLabel === 'ROI' ? `ROI ${roiFmt(displayValue)}` : `${fmt(displayValue)}${valueLabel ? ' ' + valueLabel : ''}`}`;
+    const bodyLines = extraLine ? `${extraLine}\n${bar}` : `${bar}`;
     const section = new SectionBuilder()
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`**${title}**\n${bar}`)
+        new TextDisplayBuilder().setContent(`**${title}**\n${bodyLines}`)
       )
       .setButtonAccessory(
         new ButtonBuilder()
@@ -937,6 +965,7 @@ export function renderLeaderboard(
 
   let inspect: any | undefined;
   if (selectedUser && selectedUserId) {
+    const selectedEntry = top.find(t => t.userId === selectedUserId);
     if (tier === 1) {
       const owned = selectedUser.automation || { lumberjacks: 0, foremen: 0, loggingCamps: 0, sawmills: 0, arcaneGrove: 0 };
       const rate = selectedUser.rates?.sticksPerSec || 0;
@@ -971,6 +1000,9 @@ export function renderLeaderboard(
       const role = (selectedUser as any).role3 || null;
       const a3 = (selectedUser as any).automation3 || {};
       const rate = role === 'forger' ? ((selectedUser as any).rates?.pipesPerSec || 0) : ((selectedUser as any).rates?.boxesPerSec || 0);
+      const invested = selectedEntry?.invested || 0;
+      const produced = selectedEntry?.produced || 0;
+      const roi = selectedEntry?.roi || 0;
       const list = role === 'forger'
         ? `• Pipe Foundry: ${a3.forge1 || 0}\n• Alloy Smelter: ${a3.forge2 || 0}\n• Extrusion Press: ${a3.forge3 || 0}\n• Annealing Oven: ${a3.forge4 || 0}\n• Coating Line: ${a3.forge5 || 0}`
         : `• Welding Rig: ${a3.weld1 || 0}\n• Assembly Jig: ${a3.weld2 || 0}\n• Robotic Welder: ${a3.weld3 || 0}\n• Bracing Station: ${a3.weld4 || 0}\n• Finishing Line: ${a3.weld5 || 0}`;
@@ -978,7 +1010,7 @@ export function renderLeaderboard(
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
             `## Inspect: <@${selectedUserId}> — ${role ? role[0].toUpperCase() + role.slice(1) : 'Unassigned'}\n`+
-            `Rate: ${rateFmt(rate)}/s\n${list}`
+            `Rate: ${rateFmt(rate)}/s\nROI: ${roiFmt(roi)} • Output: ${fmt(produced)} • Spend: ${fmt(invested)}\n${list}`
           )
         )
         .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
@@ -991,6 +1023,9 @@ export function renderLeaderboard(
                   : role4 === 'boilermaker' ? ((selectedUser as any).rates?.boilersPerSec || 0)
                   : role4 === 'coachbuilder' ? ((selectedUser as any).rates?.cabinsPerSec || 0)
                   : ((selectedUser as any).rates?.trainsPerSec || 0);
+      const invested = selectedEntry?.invested || 0;
+      const produced = selectedEntry?.produced || 0;
+      const roi = selectedEntry?.roi || 0;
       let list = '';
       if (role4 === 'lumberjack') {
         list = `• Hand Axe: ${a4.lj1 || 0}\n• Crosscut Saw: ${a4.lj2 || 0}\n• Felling Wedge: ${a4.lj3 || 0}\n• Logging Crane: ${a4.lj4 || 0}\n• Tree Processor: ${a4.lj5 || 0}`;
@@ -1009,7 +1044,7 @@ export function renderLeaderboard(
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
             `## Inspect: <@${selectedUserId}> — ${role4 ? role4[0].toUpperCase() + role4.slice(1) : 'Unassigned'}\n`+
-            `Rate: ${rateFmt(rate)}/s\n${list}`
+            `Rate: ${rateFmt(rate)}/s\nROI: ${roiFmt(roi)} • Output: ${fmt(produced)} • Spend: ${fmt(invested)}\n${list}`
           )
         )
         .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
@@ -1032,7 +1067,11 @@ export function renderLeaderboard(
     let youValue = options.viewerContributed || 0;
     let youTotal = totalContributions;
     let youLabel = '';
-    if ((tier === 3 || tier === 4) && options.viewerRole) {
+    if (isEfficiencyTier && options.viewerRole) {
+      youValue = options.viewerRoi || 0;
+      youTotal = Math.max(1, maxRoi);
+      youLabel = 'ROI';
+    } else if (options.viewerRole) {
       youValue = options.viewerProduced || 0;
       youTotal = (options.roleTotals?.[options.viewerRole] ?? youTotal);
       const r = options.viewerRole;
@@ -1045,8 +1084,15 @@ export function renderLeaderboard(
       else if (r === 'coachbuilder') youLabel = 'cabins';
       else if (r === 'mechanic') youLabel = 'trains';
     }
-    const bar = progressBar(youValue, Math.max(1, youTotal), 18);
-    const valueText = youLabel ? `${fmt(youValue)} ${youLabel}` : `${fmt(youValue)}`;
+    const bar = isEfficiencyTier && options.viewerRole
+      ? roiBar(youValue, Math.max(1e-6, maxRoi), 18)
+      : progressBar(youValue, Math.max(1, youTotal), 18);
+    let valueText = youLabel === 'ROI' ? `ROI ${roiFmt(youValue)}` : (youLabel ? `${fmt(youValue)} ${youLabel}` : `${fmt(youValue)}`);
+    if (isEfficiencyTier && options.viewerRole) {
+      const produced = options.viewerProduced || 0;
+      const invested = options.viewerInvested || 0;
+      valueText += ` • Output ${fmt(produced)} • Spend ${fmt(invested)}`;
+    }
     listSections.push(
       new SectionBuilder()
         .addTextDisplayComponents(

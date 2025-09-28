@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { PoolClient } from 'pg';
 import { exec, qAll, qAllTx, qOne, qOneTx, qRun, qRunTx, transaction } from './db.js';
-import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX, T4_WOOD_PER_WHEEL, T4_STEEL_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
+import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX, T4_WOOD_PER_WHEEL, T4_STEEL_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN, AUTOMATION_T3_FORGE, AUTOMATION_T3_WELD, AUTOMATION_T4_LUMBERJACK, AUTOMATION_T4_SMITHY, AUTOMATION_T4_WHEEL, AUTOMATION_T4_BOILER, AUTOMATION_T4_COACH, AUTOMATION_T4_MECHANIC, AutomationType } from './game.js';
 import { TIER_GOALS, computeTierGoal } from './config.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -11,6 +11,26 @@ interface GuildState extends Guild {
   id: string;
   createdAt: number;
   widgetTier: number;
+}
+
+function totalAutomationCost(def: AutomationType, owned: number): number {
+  owned = Math.max(0, Math.floor(owned || 0));
+  if (owned <= 0) return 0;
+  let total = 0;
+  let cost = def.baseCost;
+  for (let i = 0; i < owned; i++) {
+    total += Math.floor(cost);
+    cost *= def.growth;
+  }
+  return total;
+}
+
+function sumAutomationCosts(pairs: Array<{ def: AutomationType; owned: number }>): number {
+  let total = 0;
+  for (const { def, owned } of pairs) {
+    total += totalAutomationCost(def, owned);
+  }
+  return total;
 }
 
 function ensureDataDir(): void {
@@ -626,35 +646,166 @@ export async function getTopProducersByRole(guildId: string, role: 'forger' | 'w
   return rows as any[];
 }
 
-export async function getAllT3UsersProduction(guildId: string): Promise<Array<{ userId: string; role: 'forger' | 'welder' | null; pipesProduced: number; boxesProduced: number }>> {
-  const rows = await qAll<any>(
-    `SELECT user_id AS "userId", role, COALESCE(pipes_produced, 0) AS "pipesProduced", COALESCE(boxes_produced, 0) AS "boxesProduced" FROM tier3_users WHERE guild_id = ?`,
-    guildId
-  );
-  return rows as any;
+export interface Tier3ProductionRow {
+  userId: string;
+  role: 'forger' | 'welder' | null;
+  pipesProduced: number;
+  boxesProduced: number;
+  invested: number;
+  roi: number;
 }
 
-export async function getAllT4UsersProduction(guildId: string): Promise<Array<{ userId: string; role: string | null; woodProduced: number; steelProduced: number; wheelsProduced: number; boilersProduced: number; cabinsProduced: number; trainsProduced: number }>> {
+export async function getAllT3UsersProduction(guildId: string): Promise<Tier3ProductionRow[]> {
   const rows = await qAll<any>(
-    `SELECT user_id AS "userId", role,
-           COALESCE(wood_produced, 0) AS "woodProduced",
-           COALESCE(steel_produced, 0) AS "steelProduced",
-           COALESCE(wheels_produced, 0) AS "wheelsProduced",
-           COALESCE(boilers_produced, 0) AS "boilersProduced",
-           COALESCE(cabins_produced, 0) AS "cabinsProduced",
-           COALESCE(trains_produced, 0) AS "trainsProduced"
-     FROM tier4_users WHERE guild_id = ?
-     ORDER BY (
-       COALESCE(wood_produced, 0) +
-       COALESCE(steel_produced, 0) +
-       COALESCE(wheels_produced, 0) +
-       COALESCE(boilers_produced, 0) +
-       COALESCE(cabins_produced, 0) +
-       COALESCE(trains_produced, 0)
-     ) DESC, user_id`,
+    `SELECT user_id AS "userId",
+            role,
+            COALESCE(pipes_produced, 0) AS "pipesProduced",
+            COALESCE(boxes_produced, 0) AS "boxesProduced",
+            COALESCE(f1, 0) AS f1,
+            COALESCE(f2, 0) AS f2,
+            COALESCE(f3, 0) AS f3,
+            COALESCE(f4, 0) AS f4,
+            COALESCE(f5, 0) AS f5,
+            COALESCE(w1, 0) AS w1,
+            COALESCE(w2, 0) AS w2,
+            COALESCE(w3, 0) AS w3,
+            COALESCE(w4, 0) AS w4,
+            COALESCE(w5, 0) AS w5
+       FROM tier3_users
+       WHERE guild_id = ?`,
     guildId
   );
-  return rows as any;
+  return rows.map((r: any) => {
+    const role = (r.role || null) as 'forger' | 'welder' | null;
+    const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
+    const forgeInvestment = sumAutomationCosts([
+      { def: AUTOMATION_T3_FORGE.forge1, owned: r.f1 || 0 },
+      { def: AUTOMATION_T3_FORGE.forge2, owned: r.f2 || 0 },
+      { def: AUTOMATION_T3_FORGE.forge3, owned: r.f3 || 0 },
+      { def: AUTOMATION_T3_FORGE.forge4, owned: r.f4 || 0 },
+      { def: AUTOMATION_T3_FORGE.forge5, owned: r.f5 || 0 },
+    ]);
+    const weldInvestment = sumAutomationCosts([
+      { def: AUTOMATION_T3_WELD.weld1, owned: r.w1 || 0 },
+      { def: AUTOMATION_T3_WELD.weld2, owned: r.w2 || 0 },
+      { def: AUTOMATION_T3_WELD.weld3, owned: r.w3 || 0 },
+      { def: AUTOMATION_T3_WELD.weld4, owned: r.w4 || 0 },
+      { def: AUTOMATION_T3_WELD.weld5, owned: r.w5 || 0 },
+    ]);
+    const invested = role === 'forger' ? forgeInvestment : role === 'welder' ? weldInvestment : 0;
+    const roi = produced > 0 ? produced / (invested > 0 ? invested : 1) : 0;
+    return { ...r, role, invested, roi } as Tier3ProductionRow;
+  });
+}
+
+export interface Tier4ProductionRow {
+  userId: string;
+  role: 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic' | null;
+  woodProduced: number;
+  steelProduced: number;
+  wheelsProduced: number;
+  boilersProduced: number;
+  cabinsProduced: number;
+  trainsProduced: number;
+  invested: number;
+  roi: number;
+}
+
+export async function getAllT4UsersProduction(guildId: string): Promise<Tier4ProductionRow[]> {
+  const rows = await qAll<any>(
+    `SELECT user_id AS "userId",
+            role,
+            COALESCE(wood_produced, 0) AS "woodProduced",
+            COALESCE(steel_produced, 0) AS "steelProduced",
+            COALESCE(wheels_produced, 0) AS "wheelsProduced",
+            COALESCE(boilers_produced, 0) AS "boilersProduced",
+            COALESCE(cabins_produced, 0) AS "cabinsProduced",
+            COALESCE(trains_produced, 0) AS "trainsProduced",
+            COALESCE(lj1, 0) AS lj1,
+            COALESCE(lj2, 0) AS lj2,
+            COALESCE(lj3, 0) AS lj3,
+            COALESCE(lj4, 0) AS lj4,
+            COALESCE(lj5, 0) AS lj5,
+            COALESCE(sm1, 0) AS sm1,
+            COALESCE(sm2, 0) AS sm2,
+            COALESCE(sm3, 0) AS sm3,
+            COALESCE(sm4, 0) AS sm4,
+            COALESCE(sm5, 0) AS sm5,
+            COALESCE(wh1, 0) AS wh1,
+            COALESCE(wh2, 0) AS wh2,
+            COALESCE(wh3, 0) AS wh3,
+            COALESCE(wh4, 0) AS wh4,
+            COALESCE(wh5, 0) AS wh5,
+            COALESCE(bl1, 0) AS bl1,
+            COALESCE(bl2, 0) AS bl2,
+            COALESCE(bl3, 0) AS bl3,
+            COALESCE(bl4, 0) AS bl4,
+            COALESCE(bl5, 0) AS bl5,
+            COALESCE(cb1, 0) AS cb1,
+            COALESCE(cb2, 0) AS cb2,
+            COALESCE(cb3, 0) AS cb3,
+            COALESCE(cb4, 0) AS cb4,
+            COALESCE(cb5, 0) AS cb5,
+            COALESCE(ta1, 0) AS ta1,
+            COALESCE(ta2, 0) AS ta2,
+            COALESCE(ta3, 0) AS ta3,
+            COALESCE(ta4, 0) AS ta4,
+            COALESCE(ta5, 0) AS ta5
+       FROM tier4_users
+       WHERE guild_id = ?`,
+    guildId
+  );
+  return rows.map((r: any) => {
+    const role = (r.role || null) as Tier4ProductionRow['role'];
+    let produced = 0;
+    if (role === 'lumberjack') produced = r.woodProduced || 0;
+    else if (role === 'smithy') produced = r.steelProduced || 0;
+    else if (role === 'wheelwright') produced = r.wheelsProduced || 0;
+    else if (role === 'boilermaker') produced = r.boilersProduced || 0;
+    else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
+    else if (role === 'mechanic') produced = r.trainsProduced || 0;
+
+    const invested = role === 'lumberjack' ? sumAutomationCosts([
+      { def: AUTOMATION_T4_LUMBERJACK.lj1, owned: r.lj1 || 0 },
+      { def: AUTOMATION_T4_LUMBERJACK.lj2, owned: r.lj2 || 0 },
+      { def: AUTOMATION_T4_LUMBERJACK.lj3, owned: r.lj3 || 0 },
+      { def: AUTOMATION_T4_LUMBERJACK.lj4, owned: r.lj4 || 0 },
+      { def: AUTOMATION_T4_LUMBERJACK.lj5, owned: r.lj5 || 0 },
+    ]) : role === 'smithy' ? sumAutomationCosts([
+      { def: AUTOMATION_T4_SMITHY.sm1, owned: r.sm1 || 0 },
+      { def: AUTOMATION_T4_SMITHY.sm2, owned: r.sm2 || 0 },
+      { def: AUTOMATION_T4_SMITHY.sm3, owned: r.sm3 || 0 },
+      { def: AUTOMATION_T4_SMITHY.sm4, owned: r.sm4 || 0 },
+      { def: AUTOMATION_T4_SMITHY.sm5, owned: r.sm5 || 0 },
+    ]) : role === 'wheelwright' ? sumAutomationCosts([
+      { def: AUTOMATION_T4_WHEEL.wh1, owned: r.wh1 || 0 },
+      { def: AUTOMATION_T4_WHEEL.wh2, owned: r.wh2 || 0 },
+      { def: AUTOMATION_T4_WHEEL.wh3, owned: r.wh3 || 0 },
+      { def: AUTOMATION_T4_WHEEL.wh4, owned: r.wh4 || 0 },
+      { def: AUTOMATION_T4_WHEEL.wh5, owned: r.wh5 || 0 },
+    ]) : role === 'boilermaker' ? sumAutomationCosts([
+      { def: AUTOMATION_T4_BOILER.bl1, owned: r.bl1 || 0 },
+      { def: AUTOMATION_T4_BOILER.bl2, owned: r.bl2 || 0 },
+      { def: AUTOMATION_T4_BOILER.bl3, owned: r.bl3 || 0 },
+      { def: AUTOMATION_T4_BOILER.bl4, owned: r.bl4 || 0 },
+      { def: AUTOMATION_T4_BOILER.bl5, owned: r.bl5 || 0 },
+    ]) : role === 'coachbuilder' ? sumAutomationCosts([
+      { def: AUTOMATION_T4_COACH.cb1, owned: r.cb1 || 0 },
+      { def: AUTOMATION_T4_COACH.cb2, owned: r.cb2 || 0 },
+      { def: AUTOMATION_T4_COACH.cb3, owned: r.cb3 || 0 },
+      { def: AUTOMATION_T4_COACH.cb4, owned: r.cb4 || 0 },
+      { def: AUTOMATION_T4_COACH.cb5, owned: r.cb5 || 0 },
+    ]) : role === 'mechanic' ? sumAutomationCosts([
+      { def: AUTOMATION_T4_MECHANIC.ta1, owned: r.ta1 || 0 },
+      { def: AUTOMATION_T4_MECHANIC.ta2, owned: r.ta2 || 0 },
+      { def: AUTOMATION_T4_MECHANIC.ta3, owned: r.ta3 || 0 },
+      { def: AUTOMATION_T4_MECHANIC.ta4, owned: r.ta4 || 0 },
+      { def: AUTOMATION_T4_MECHANIC.ta5, owned: r.ta5 || 0 },
+    ]) : 0;
+
+    const roi = produced > 0 ? produced / (invested > 0 ? invested : 1) : 0;
+    return { ...r, role, invested, roi } as Tier4ProductionRow;
+  });
 }
 
 export async function getUsersByRoleT3(guildId: string, role: 'forger' | 'welder'): Promise<string[]> {
@@ -710,6 +861,61 @@ export async function getUserContributionByTier(guildId: string, tier: number, u
 }
 
 export async function getUserRankByTier(guildId: string, tier: number, userId: string): Promise<{ rank: number; contributed: number }> {
+  if (tier === 3) {
+    const rows = await getAllT3UsersProduction(guildId);
+    const filtered = rows
+      .map(r => {
+        const role = r.role || null;
+        const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
+        return { ...r, role, produced };
+      })
+      .filter(r => r.role && r.produced > 0);
+    const userRow = filtered.find(r => r.userId === userId);
+    const userRoi = userRow ? (rtoi(userRow.roi) || 0) : 0;
+    const userProduced = userRow ? (userRow.produced || 0) : 0;
+    const higher = filtered.filter(r => {
+      const roi = rtoi(r.roi);
+      if (roi > userRoi + 1e-9) return true;
+      if (Math.abs(roi - userRoi) <= 1e-9) {
+        const produced = r.produced || 0;
+        return produced > userProduced + 1e-6;
+      }
+      return false;
+    }).length;
+    const rank = userRow ? higher + 1 : filtered.length + 1;
+    return { rank, contributed: userRoi };
+  }
+  if (tier === 4) {
+    const rows = await getAllT4UsersProduction(guildId);
+    const filtered = rows
+      .map(r => {
+        const role = r.role || null;
+        let produced = 0;
+        if (role === 'lumberjack') produced = r.woodProduced || 0;
+        else if (role === 'smithy') produced = r.steelProduced || 0;
+        else if (role === 'wheelwright') produced = r.wheelsProduced || 0;
+        else if (role === 'boilermaker') produced = r.boilersProduced || 0;
+        else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
+        else if (role === 'mechanic') produced = r.trainsProduced || 0;
+        return { ...r, role, produced };
+      })
+      .filter(r => r.role && r.produced > 0);
+    const userRow = filtered.find(r => r.userId === userId);
+    const userRoi = userRow ? (rtoi(userRow.roi) || 0) : 0;
+    const userProduced = userRow ? (userRow.produced || 0) : 0;
+    const higher = filtered.filter(r => {
+      const roi = rtoi(r.roi);
+      if (roi > userRoi + 1e-9) return true;
+      if (Math.abs(roi - userRoi) <= 1e-9) {
+        const produced = r.produced || 0;
+        return produced > userProduced + 1e-6;
+      }
+      return false;
+    }).length;
+    const rank = userRow ? higher + 1 : filtered.length + 1;
+    return { rank, contributed: userRoi };
+  }
+
   const contrib = await getUserContributionByTier(guildId, tier, userId);
   let rank = 1;
   if (tier === 1) {
@@ -718,14 +924,13 @@ export async function getUserRankByTier(guildId: string, tier: number, userId: s
   } else if (tier === 2) {
     const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier2_users WHERE guild_id = ? AND contributed_t2 > ?`, guildId, contrib);
     rank = 1 + (row?.higher ?? 0);
-  } else if (tier === 3) {
-    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier3_users WHERE guild_id = ? AND contributed_t3 > ?`, guildId, contrib);
-    rank = 1 + (row?.higher ?? 0);
-  } else {
-    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier4_users WHERE guild_id = ? AND contributed_t4 > ?`, guildId, contrib);
-    rank = 1 + (row?.higher ?? 0);
   }
   return { rank, contributed: contrib };
+}
+
+function rtoi(n: number | null | undefined): number {
+  if (!isFinite(n as number) || !n) return 0;
+  return Number(n);
 }
 
 export async function initState(): Promise<void> {
@@ -735,42 +940,68 @@ export async function initState(): Promise<void> {
 export async function computeAndAwardMvp(guildId: string): Promise<string | null> {
   try {
     return await transaction(async client => {
-      const t1total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t1),0) AS s FROM tier1_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
-      const t2total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t2),0) AS s FROM tier2_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
-      const t3total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t3),0) AS s FROM tier3_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
-      const t4total = (await qOneTx(client, `SELECT COALESCE(SUM(contributed_t4),0) AS s FROM tier4_users WHERE guild_id = ?`, guildId) as any)?.s || 0;
-      const grandTotal = t1total + t2total + t3total + t4total;
-      if (grandTotal <= 0) return null;
+      type RoiSummary = { sum: number; count: number; totalProduced: number };
+      const roiByUser = new Map<string, RoiSummary>();
 
-      const t1 = await qAllTx(client, `SELECT user_id, contributed_t1 AS c FROM tier1_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
-      const t2 = await qAllTx(client, `SELECT user_id, contributed_t2 AS c FROM tier2_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
-      const t3 = await qAllTx(client, `SELECT user_id, contributed_t3 AS c FROM tier3_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
-      const t4 = await qAllTx(client, `SELECT user_id, contributed_t4 AS c FROM tier4_users WHERE guild_id = ?`, guildId) as Array<{ user_id: string; c: number }>;
-      const m1 = new Map(t1.map(r => [r.user_id, r.c || 0]));
-      const m2 = new Map(t2.map(r => [r.user_id, r.c || 0]));
-      const m3 = new Map(t3.map(r => [r.user_id, r.c || 0]));
-      const m4 = new Map(t4.map(r => [r.user_id, r.c || 0]));
+      const addRoi = (userId: string, roi: number, produced: number) => {
+        if (!userId) return;
+        if (!(roi > 0 || produced > 0)) return;
+        const entry = roiByUser.get(userId) || { sum: 0, count: 0, totalProduced: 0 };
+        entry.sum += roi;
+        entry.count += 1;
+        entry.totalProduced += produced;
+        roiByUser.set(userId, entry);
+      };
 
-      const users = await qAllTx(client, `SELECT user_id FROM users WHERE guild_id = ?`, guildId) as Array<{ user_id: string }>;
+      const tier3 = await getAllT3UsersProduction(guildId);
+      for (const row of tier3) {
+        if (!row.role) continue;
+        const produced = row.role === 'forger'
+          ? (row.pipesProduced || 0)
+          : row.role === 'welder'
+            ? (row.boxesProduced || 0)
+            : 0;
+        addRoi(row.userId, row.roi, produced);
+      }
+
+      const tier4 = await getAllT4UsersProduction(guildId);
+      for (const row of tier4) {
+        if (!row.role) continue;
+        addRoi(row.userId, row.roi, (() => {
+          switch (row.role) {
+            case 'lumberjack': return row.woodProduced || 0;
+            case 'smithy': return row.steelProduced || 0;
+            case 'wheelwright': return row.wheelsProduced || 0;
+            case 'boilermaker': return row.boilersProduced || 0;
+            case 'coachbuilder': return row.cabinsProduced || 0;
+            case 'mechanic': return row.trainsProduced || 0;
+            default: return 0;
+          }
+        })());
+      }
+
       let bestId: string | null = null;
-      let bestShare = -1;
-      let tieBreak: [number, number, number, number] = [0,0,0,0];
-      for (const u of users) {
-        const c1 = m1.get(u.user_id) || 0;
-        const c2 = m2.get(u.user_id) || 0;
-        const c3 = m3.get(u.user_id) || 0;
-        const c4 = m4.get(u.user_id) || 0;
-        const sum = c1 + c2 + c3 + c4;
-        if (sum <= 0) continue;
-        const share = sum / grandTotal;
-        const tb: [number, number, number, number] = [c4, c3, c2, c1];
-        const better = share > bestShare || (Math.abs(share - bestShare) < 1e-12 && (tb[0] > tieBreak[0] || (tb[0] === tieBreak[0] && (tb[1] > tieBreak[1] || (tb[1] === tieBreak[1] && (tb[2] > tieBreak[2] || (tb[2] === tieBreak[2] && tb[3] > tieBreak[3])))))));
-        if (better) {
-          bestShare = share;
-          bestId = u.user_id;
-          tieBreak = tb;
+      let bestAvg = -1;
+      let bestCount = 0;
+      let bestProduced = 0;
+      for (const [userId, info] of roiByUser.entries()) {
+        if (info.count <= 0) continue;
+        const avg = info.sum / info.count;
+        if (avg > bestAvg + 1e-9) {
+          bestAvg = avg;
+          bestCount = info.count;
+          bestProduced = info.totalProduced;
+          bestId = userId;
+        } else if (Math.abs(avg - bestAvg) <= 1e-9) {
+          if (info.count > bestCount || (info.count === bestCount && info.totalProduced > bestProduced)) {
+            bestAvg = avg;
+            bestCount = info.count;
+            bestProduced = info.totalProduced;
+            bestId = userId;
+          }
         }
       }
+
       if (bestId) {
         await qRunTx(client, `UPDATE users SET prestige_mvp_awards = COALESCE(prestige_mvp_awards,0) + 1 WHERE guild_id = ? AND user_id = ?`, guildId, bestId);
       }
@@ -1058,6 +1289,7 @@ export async function resetAllUsersForPrestige(guildId: string): Promise<void> {
       -- Re-enable all consumers by default
       wheel_enabled = 1, boiler_enabled = 1, coach_enabled = 1, mech_enabled = 1
       WHERE guild_id = ?`, guildId);
+    await qRunTx(client, `DELETE FROM purchase_events WHERE guild_id = ?`, guildId);
   });
 }
 
