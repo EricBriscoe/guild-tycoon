@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
-import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getT3ProductionTotals, getT4ProductionTotals, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole, logPurchaseEvent, getPurchaseEvents } from './state.js';
+import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole, logPurchaseEvent, getPurchaseEvents } from './state.js';
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 import 'chart.js/auto';
 import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm, renderRoleSwitchSelectorT4 } from './ui.js';
@@ -173,10 +173,13 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           return null;
         });
         
-        let top: Array<{ userId: string; contributed: number; role?: any; produced?: number }>;
+        type LeaderboardRow = { userId: string; contributed: number; role?: any; produced?: number; invested?: number; roi?: number };
+        let top: LeaderboardRow[];
         let roleTotals: Record<string, number> | undefined = undefined;
         let viewerRole: string | null = null;
         let viewerProduced = 0;
+        let viewerInvested = 0;
+        let viewerRoi = 0;
         const dedupeByUserId = <T extends { userId: string }>(arr: T[]): T[] => {
           const seen = new Set<string>();
           const out: T[] = [];
@@ -189,27 +192,33 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           return out;
         };
         if (tier === 3) {
-          // For Tier 3, rank by percent-of-role (produced / total[role])
           const rows = await getAllT3UsersProduction(guildId);
-          roleTotals = await getT3ProductionTotals(guildId) as any;
           const enriched = rows
             .map(r => {
               const role = (r.role || undefined) as any;
               const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
-              const total = role ? (roleTotals as any)[role] || 0 : 0;
-              const percent = total > 0 ? (produced / total) : 0;
-              return { userId: r.userId, contributed: produced, role, produced, percent };
+              const invested = r.invested || 0;
+              const roi = r.roi || 0;
+              return { userId: r.userId, contributed: produced, role, produced, invested, roi };
             })
             .filter(x => x.role && x.produced > 0);
-          enriched.sort((a, b) => b.percent - a.percent);
+          enriched.sort((a, b) => {
+            const roiDiff = (b.roi || 0) - (a.roi || 0);
+            if (Math.abs(roiDiff) > 1e-9) return roiDiff;
+            return (b.produced || 0) - (a.produced || 0);
+          });
           top = dedupeByUserId(enriched);
           viewerRole = (currentUser as any)?.role3 || null;
           if (viewerRole === 'forger') viewerProduced = (currentUser as any).pipesProduced || 0;
           else if (viewerRole === 'welder') viewerProduced = (currentUser as any).boxesProduced || 0;
+          const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
+          if (viewerRow) {
+            viewerInvested = viewerRow.invested || 0;
+            viewerRoi = viewerRow.roi || 0;
+          }
         } else {
           if (tier === 4) {
             const rows = await getAllT4UsersProduction(guildId);
-            roleTotals = await getT4ProductionTotals(guildId) as any;
             const enriched = rows
               .map(r => {
                 const role = (r.role || undefined) as any;
@@ -220,12 +229,16 @@ client.on('interactionCreate', async (interaction: Interaction) => {
                 else if (role === 'boilermaker') produced = r.boilersProduced || 0;
                 else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
                 else if (role === 'mechanic') produced = r.trainsProduced || 0;
-                const total = role ? (roleTotals as any)[role] || 0 : 0;
-                const percent = total > 0 ? (produced / total) : 0;
-                return { userId: r.userId, contributed: produced, role, produced, percent };
+                const invested = r.invested || 0;
+                const roi = r.roi || 0;
+                return { userId: r.userId, contributed: produced, role, produced, invested, roi };
               })
               .filter(x => x.role && x.produced > 0);
-            enriched.sort((a, b) => b.percent - a.percent);
+            enriched.sort((a, b) => {
+              const roiDiff = (b.roi || 0) - (a.roi || 0);
+              if (Math.abs(roiDiff) > 1e-9) return roiDiff;
+              return (b.produced || 0) - (a.produced || 0);
+            });
             top = dedupeByUserId(enriched);
             viewerRole = (currentUser as any)?.role4 || null;
             if (viewerRole === 'lumberjack') viewerProduced = (currentUser as any).woodProduced || 0;
@@ -234,6 +247,11 @@ client.on('interactionCreate', async (interaction: Interaction) => {
             else if (viewerRole === 'boilermaker') viewerProduced = (currentUser as any).boilersProduced || 0;
             else if (viewerRole === 'coachbuilder') viewerProduced = (currentUser as any).cabinsProduced || 0;
             else if (viewerRole === 'mechanic') viewerProduced = (currentUser as any).trainsProduced || 0;
+            const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
+            if (viewerRow) {
+              viewerInvested = viewerRow.invested || 0;
+              viewerRoi = viewerRow.roi || 0;
+            }
           } else {
             top = dedupeByUserId(await getTopContributorsByTier(guildId, tier, 5));
           }
@@ -245,14 +263,16 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           await withGuildAndUser(guildId, selectedUserId, (g2, u2) => { selectedUser = u2; return null; });
         }
         const viewer = await getUserRankByTier(guildId, tier, interaction.user.id);
-        dTop('slash /top', { tier, roleTotals, viewerRole, viewerProduced, top });
+        dTop('slash /top', { tier, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, top });
         view = renderLeaderboard(currentGuild, tier, top, selectedUserId, selectedUser, { 
           viewerId: interaction.user.id, 
           viewerRank: viewer.rank, 
           viewerContributed: viewer.contributed,
           roleTotals,
           viewerRole,
-          viewerProduced
+          viewerProduced,
+          viewerInvested,
+          viewerRoi
         });
         await command.reply({
           ...(view || {}),
@@ -544,8 +564,8 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           return { guild, tier: guild.widgetTier || 1, selectedUser } as any;
         });
         const tier = (res as any).tier as number;
-        let top: Array<{ userId: string; contributed: number; role?: any; produced?: number; percent?: number }>;
-        let roleTotals: Record<string, number> | undefined = undefined;
+        type ButtonLeaderboardRow = { userId: string; contributed: number; role?: any; produced?: number; invested?: number; roi?: number };
+        let top: ButtonLeaderboardRow[];
         const dedupeByUserId = <T extends { userId: string }>(arr: T[]): T[] => {
           const seen = new Set<string>();
           const out: T[] = [];
@@ -557,23 +577,38 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           }
           return out;
         };
+        let viewerRole: string | null = null;
+        let viewerProduced = 0;
+        let viewerInvested = 0;
+        let viewerRoi = 0;
+        let roleTotals: Record<string, number> | undefined = undefined;
         if (tier === 3) {
           const rows = await getAllT3UsersProduction(guildId);
-          roleTotals = await getT3ProductionTotals(guildId) as any;
           const enriched = rows
             .map(r => {
               const role = (r.role || undefined) as any;
               const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
-              const total = role ? (roleTotals as any)[role] || 0 : 0;
-              const percent = total > 0 ? (produced / total) : 0;
-              return { userId: r.userId, contributed: produced, role, produced, percent };
+              const invested = r.invested || 0;
+              const roi = r.roi || 0;
+              return { userId: r.userId, contributed: produced, role, produced, invested, roi };
             })
             .filter(x => x.role && x.produced > 0);
-          enriched.sort((a, b) => b.percent - a.percent);
+          enriched.sort((a, b) => {
+            const roiDiff = (b.roi || 0) - (a.roi || 0);
+            if (Math.abs(roiDiff) > 1e-9) return roiDiff;
+            return (b.produced || 0) - (a.produced || 0);
+          });
           top = dedupeByUserId(enriched);
+          viewerRole = (currentUser as any)?.role3 || null;
+          if (viewerRole === 'forger') viewerProduced = (currentUser as any).pipesProduced || 0;
+          else if (viewerRole === 'welder') viewerProduced = (currentUser as any).boxesProduced || 0;
+          const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
+          if (viewerRow) {
+            viewerInvested = viewerRow.invested || 0;
+            viewerRoi = viewerRow.roi || 0;
+          }
         } else if (tier === 4) {
           const rows = await getAllT4UsersProduction(guildId);
-          roleTotals = await getT4ProductionTotals(guildId) as any;
           const enriched = rows
             .map(r => {
               const role = (r.role || undefined) as any;
@@ -584,44 +619,44 @@ client.on('interactionCreate', async (interaction: Interaction) => {
               else if (role === 'boilermaker') produced = r.boilersProduced || 0;
               else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
               else if (role === 'mechanic') produced = r.trainsProduced || 0;
-              const total = role ? (roleTotals as any)[role] || 0 : 0;
-              const percent = total > 0 ? (produced / total) : 0;
-              return { userId: r.userId, contributed: produced, role, produced, percent };
+              const invested = r.invested || 0;
+              const roi = r.roi || 0;
+              return { userId: r.userId, contributed: produced, role, produced, invested, roi };
             })
             .filter(x => x.role && x.produced > 0);
-          enriched.sort((a, b) => b.percent - a.percent);
+          enriched.sort((a, b) => {
+            const roiDiff = (b.roi || 0) - (a.roi || 0);
+            if (Math.abs(roiDiff) > 1e-9) return roiDiff;
+            return (b.produced || 0) - (a.produced || 0);
+          });
           top = dedupeByUserId(enriched);
+          viewerRole = (currentUser as any)?.role4 || null;
+          if (viewerRole === 'lumberjack') viewerProduced = (currentUser as any).woodProduced || 0;
+          else if (viewerRole === 'smithy') viewerProduced = (currentUser as any).steelProduced || 0;
+          else if (viewerRole === 'wheelwright') viewerProduced = (currentUser as any).wheelsProduced || 0;
+          else if (viewerRole === 'boilermaker') viewerProduced = (currentUser as any).boilersProduced || 0;
+          else if (viewerRole === 'coachbuilder') viewerProduced = (currentUser as any).cabinsProduced || 0;
+          else if (viewerRole === 'mechanic') viewerProduced = (currentUser as any).trainsProduced || 0;
+          const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
+          if (viewerRow) {
+            viewerInvested = viewerRow.invested || 0;
+            viewerRoi = viewerRow.roi || 0;
+          }
         } else {
           top = dedupeByUserId(await getTopContributorsByTier(guildId, tier, 5));
         }
 
         const viewer = await getUserRankByTier(guildId, tier, interaction.user.id);
-        let viewerRole: string | null = null;
-        let viewerProduced = 0;
-        await withGuildAndUser(guildId, interaction.user.id, (_g, u) => {
-          if (tier === 3) {
-            viewerRole = (u as any).role3 || null;
-            if (viewerRole === 'forger') viewerProduced = (u as any).pipesProduced || 0;
-            else if (viewerRole === 'welder') viewerProduced = (u as any).boxesProduced || 0;
-          } else if (tier === 4) {
-            viewerRole = (u as any).role4 || null;
-            if (viewerRole === 'lumberjack') viewerProduced = (u as any).woodProduced || 0;
-            else if (viewerRole === 'smithy') viewerProduced = (u as any).steelProduced || 0;
-            else if (viewerRole === 'wheelwright') viewerProduced = (u as any).wheelsProduced || 0;
-            else if (viewerRole === 'boilermaker') viewerProduced = (u as any).boilersProduced || 0;
-            else if (viewerRole === 'coachbuilder') viewerProduced = (u as any).cabinsProduced || 0;
-            else if (viewerRole === 'mechanic') viewerProduced = (u as any).trainsProduced || 0;
-          }
-          return null;
-        });
-        dTop('button top:view', { tier, roleTotals, top });
+        dTop('button top:view', { tier, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, top });
         view = renderLeaderboard((res as any).guild, tier, top, selectedUserId, selectedUserId ? (res as any).selectedUser : undefined, {
           viewerId: interaction.user.id,
           viewerRank: viewer.rank,
           viewerContributed: viewer.contributed,
           roleTotals,
           viewerRole,
-          viewerProduced
+          viewerProduced,
+          viewerInvested,
+          viewerRoi
         });
         {
           const ok = await safeUpdate(buttonInteraction, view);
