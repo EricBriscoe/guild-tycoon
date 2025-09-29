@@ -863,18 +863,26 @@ const roiFmt = (n: number): string => {
   return n.toFixed(2);
 };
 
-const roiBar = (current: number, max: number, width: number = 18): string => {
+const scoreFmt = (n: number): string => {
+  if (!isFinite(n) || n === 0) return '0.00';
+  const abs = Math.abs(n);
+  if (abs >= 100) return n.toFixed(0);
+  if (abs >= 10) return n.toFixed(1);
+  return n.toFixed(2);
+};
+
+const scoreBar = (current: number, max: number, width: number = 18): string => {
   const cappedMax = Math.max(1e-6, max);
   const ratio = Math.max(0, Math.min(1, current / cappedMax));
   const filled = Math.round(ratio * width);
   const empty = width - filled;
-  return '█'.repeat(filled) + '░'.repeat(empty) + ` ROI ${roiFmt(current)}/${roiFmt(cappedMax)}`;
+  return '█'.repeat(filled) + '░'.repeat(empty) + ` Score ${scoreFmt(current)}/${scoreFmt(cappedMax)}`;
 };
 
 export function renderLeaderboard(
   guild: Guild,
   tier: number,
-  top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder' | 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'; produced?: number; invested?: number; roi?: number }>,
+  top: Array<{ userId: string; contributed: number; role?: 'forger' | 'welder' | 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic'; produced?: number; invested?: number; roi?: number; share?: number; score?: number; resource?: string }>,
   selectedUserId?: string,
   selectedUser?: User,
   options?: { 
@@ -886,20 +894,24 @@ export function renderLeaderboard(
     viewerProduced?: number;
     viewerInvested?: number;
     viewerRoi?: number;
+    viewerShare?: number;
+    viewerScore?: number;
+    viewerResource?: string | null;
   }
 ) {
-  const isEfficiencyTier = tier === 3 || tier === 4;
-  const headerTitle = isEfficiencyTier ? 'Top Efficiency' : 'Top Contributors';
+  const usesScore = top.some(row => typeof (row as any).score === 'number');
+  const headerTitle = usesScore ? 'Top Efficiency' : 'Top Contributors';
   const MAX_ROWS = 4; // keep total component count well under 40
   top = top.slice(0, MAX_ROWS);
   const header = new TextDisplayBuilder()
-    .setContent(`# ${headerTitle} — Tier ${tier} ${tier === 1 ? '(Sticks)' : tier === 2 ? '(Iron Beams)' : tier === 3 ? '(Steel Boxes)' : '(Trains)'}\n`);
+    .setContent(`# ${headerTitle} — Tier ${tier} ${tier === 1 ? '(Sticks)' : tier === 2 ? '(Iron Beams)' : tier === 3 ? '(Steel Boxes)' : '(Trains)'}\n` +
+      (usesScore ? '_Score = ROI × contribution share_\n' : ''));
 
   const listSections: any[] = [];
   const totalContributions = top.reduce((sum, t) => sum + t.contributed, 0);
   // Full-guild totals by role for Tier 3/4, provided by caller (required for accurate %)
   const totalsByRole: Record<string, number> = options?.roleTotals || {};
-  const maxRoi = top.reduce((acc, row) => Math.max(acc, row.roi || 0), 0);
+  const maxScore = top.reduce((acc, row) => Math.max(acc, (row as any).score ?? row.roi ?? 0), 0);
   
   const medalIcon = (i: number) => (i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '');
   for (let i = 0; i < top.length; i++) {
@@ -907,26 +919,31 @@ export function renderLeaderboard(
     const isSelected = row.userId === selectedUserId;
     
     let displayValue: number, totalForPercentage: number, valueLabel: string, extraLine = '';
-    if (isEfficiencyTier && (row as any).role) {
-      // Show ROI data for Tier 3/4
-      const userRole = (row as any).role as string;
+    if (usesScore && Object.prototype.hasOwnProperty.call(row, 'roi')) {
       const produced = (row as any).produced || 0;
       const invested = (row as any).invested || 0;
       const roi = (row as any).roi || 0;
-      displayValue = roi;
-      totalForPercentage = Math.max(1, maxRoi);
-      valueLabel = 'ROI';
-      const unit = userRole === 'forger' ? 'pipes'
-        : userRole === 'welder' ? 'boxes'
-        : userRole === 'lumberjack' ? 'wood'
-        : userRole === 'smithy' ? 'steel'
-        : userRole === 'wheelwright' ? 'wheels'
-        : userRole === 'boilermaker' ? 'boilers'
-        : userRole === 'coachbuilder' ? 'cabins'
-        : userRole === 'mechanic' ? 'trains'
-        : '';
-      const spentUnit = unit === 'pipes' || unit === 'boxes' ? unit : (userRole === 'mechanic' ? 'parts' : unit || 'resources');
-      extraLine = `ROI: ${roiFmt(roi)} • Output: ${fmt(produced)}${unit ? ' ' + unit : ''} • Spent: ${fmt(invested)} ${spentUnit}`;
+      const score = (row as any).score ?? roi;
+      const share = (row as any).share || 0;
+      displayValue = score;
+      totalForPercentage = Math.max(1, maxScore);
+      valueLabel = 'Score';
+      const role = (row as any).role as string | undefined;
+      let unit = (row as any).resource as string | undefined;
+      if (!unit) {
+        if (role === 'forger') unit = 'pipes';
+        else if (role === 'welder') unit = 'boxes';
+        else if (role === 'lumberjack') unit = 'wood';
+        else if (role === 'smithy') unit = 'steel';
+        else if (role === 'wheelwright') unit = 'wheels';
+        else if (role === 'boilermaker') unit = 'boilers';
+        else if (role === 'coachbuilder') unit = 'cabins';
+        else if (role === 'mechanic') unit = 'trains';
+        else if (tier === 1) unit = 'sticks';
+        else if (tier === 2) unit = 'beams';
+      }
+      const spentUnit = unit || 'resources';
+      extraLine = `Score: ${scoreFmt(score)} (ROI ${roiFmt(roi)} × Share ${(share * 100).toFixed(2)}%) • Output: ${fmt(produced)}${unit ? ' ' + unit : ''} • Spent: ${fmt(invested)} ${spentUnit}`;
     } else {
       // Show contribution data for Tier 1 & 2
       displayValue = row.contributed;
@@ -934,10 +951,10 @@ export function renderLeaderboard(
       valueLabel = '';
     }
     
-    const bar = (isEfficiencyTier && (row as any).role)
-      ? roiBar(displayValue, Math.max(1e-6, maxRoi), 18)
+    const bar = (usesScore && Object.prototype.hasOwnProperty.call(row, 'roi'))
+      ? scoreBar(displayValue, Math.max(1e-6, maxScore), 18)
       : progressBar(displayValue, Math.max(1, totalForPercentage), 18);
-    const roleIcon = isEfficiencyTier && (row as any).role
+    const roleIcon = usesScore && (row as any).role
       ? ((row as any).role === 'forger' ? '🔧 '
         : (row as any).role === 'welder' ? '🔩 '
         : (row as any).role === 'lumberjack' ? '🌲 '
@@ -948,7 +965,7 @@ export function renderLeaderboard(
         : (row as any).role === 'mechanic' ? '🚂 ' : '')
       : '';
     const prefix = `${medalIcon(i)}${i + 1}.`;
-    const title = `${prefix} ${roleIcon}<@${row.userId}> — ${valueLabel === 'ROI' ? `ROI ${roiFmt(displayValue)}` : `${fmt(displayValue)}${valueLabel ? ' ' + valueLabel : ''}`}`;
+    const title = `${prefix} ${roleIcon}<@${row.userId}> — ${valueLabel === 'Score' ? `Score ${scoreFmt(displayValue)}` : `${fmt(displayValue)}${valueLabel ? ' ' + valueLabel : ''}`}`;
     const bodyLines = extraLine ? `${extraLine}\n${bar}` : `${bar}`;
     const section = new SectionBuilder()
       .addTextDisplayComponents(
@@ -969,11 +986,20 @@ export function renderLeaderboard(
     if (tier === 1) {
       const owned = selectedUser.automation || { lumberjacks: 0, foremen: 0, loggingCamps: 0, sawmills: 0, arcaneGrove: 0 };
       const rate = selectedUser.rates?.sticksPerSec || 0;
+      const invested = selectedEntry?.invested || 0;
+      const produced = selectedEntry?.produced || selectedEntry?.contributed || 0;
+      const roi = selectedEntry?.roi || 0;
+      const share = selectedEntry?.share || 0;
+      const score = selectedEntry?.score ?? (roi * share);
+      const resource = selectedEntry?.resource || 'sticks';
       inspect = new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(`## Inspect: <@${selectedUserId}>`),
           new TextDisplayBuilder().setContent(
-            `Rate: ${rateFmt(rate)}/s\nAutomation:\n` +
+            `Rate: ${rateFmt(rate)}/s\n` +
+            `Score: ${scoreFmt(score)} (ROI ${roiFmt(roi)} × Share ${(share * 100).toFixed(2)}%)\n` +
+            `Output: ${fmt(produced)}${resource ? ' ' + resource : ''} • Spend: ${fmt(invested)}${resource ? ' ' + resource : ''}\n` +
+            'Automation:\n' +
             `• Lumberjacks: ${owned.lumberjacks}\n` +
             `• Foremen: ${owned.foremen}\n` +
             `• Logging Camps: ${owned.loggingCamps}\n` +
@@ -987,11 +1013,19 @@ export function renderLeaderboard(
     } else if (tier === 2) {
       const a2 = (selectedUser as any).automation2 || { miners: 0, smelters: 0, foundries: 0, beamMills: 0, arcaneForge: 0 };
       const rate = (selectedUser as any).rates?.beamsPerSec || 0;
+      const invested = selectedEntry?.invested || 0;
+      const produced = selectedEntry?.produced || selectedEntry?.contributed || 0;
+      const roi = selectedEntry?.roi || 0;
+      const share = selectedEntry?.share || 0;
+      const score = selectedEntry?.score ?? (roi * share);
+      const resource = selectedEntry?.resource || 'beams';
       inspect = new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
             `## Inspect: <@${selectedUserId}>\n`+
             `Rate: ${rateFmt(rate)}/s\n`+
+            `Score: ${scoreFmt(score)} (ROI ${roiFmt(roi)} × Share ${(share * 100).toFixed(2)}%)\n`+
+            `Output: ${fmt(produced)}${resource ? ' ' + resource : ''} • Spend: ${fmt(invested)}${resource ? ' ' + resource : ''}\n`+
             `• Miners: ${a2.miners}\n• Smelters: ${a2.smelters}\n• Foundries: ${a2.foundries}\n• Beam Mills: ${a2.beamMills}\n• Arcane Forge: ${a2.arcaneForge}`
           )
         )
@@ -1003,6 +1037,9 @@ export function renderLeaderboard(
       const invested = selectedEntry?.invested || 0;
       const produced = selectedEntry?.produced || 0;
       const roi = selectedEntry?.roi || 0;
+      const share = selectedEntry?.share || 0;
+      const score = selectedEntry?.score ?? (roi * share);
+      const resource = selectedEntry?.resource || (role === 'forger' ? 'pipes' : role === 'welder' ? 'boxes' : undefined);
       const list = role === 'forger'
         ? `• Pipe Foundry: ${a3.forge1 || 0}\n• Alloy Smelter: ${a3.forge2 || 0}\n• Extrusion Press: ${a3.forge3 || 0}\n• Annealing Oven: ${a3.forge4 || 0}\n• Coating Line: ${a3.forge5 || 0}`
         : `• Welding Rig: ${a3.weld1 || 0}\n• Assembly Jig: ${a3.weld2 || 0}\n• Robotic Welder: ${a3.weld3 || 0}\n• Bracing Station: ${a3.weld4 || 0}\n• Finishing Line: ${a3.weld5 || 0}`;
@@ -1010,7 +1047,9 @@ export function renderLeaderboard(
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
             `## Inspect: <@${selectedUserId}> — ${role ? role[0].toUpperCase() + role.slice(1) : 'Unassigned'}\n`+
-            `Rate: ${rateFmt(rate)}/s\nROI: ${roiFmt(roi)} • Output: ${fmt(produced)} • Spend: ${fmt(invested)}\n${list}`
+            `Rate: ${rateFmt(rate)}/s\n`+
+            `Score: ${scoreFmt(score)} (ROI ${roiFmt(roi)} × Share ${(share * 100).toFixed(2)}%)\n`+
+            `Output: ${fmt(produced)}${resource ? ' ' + resource : ''} • Spend: ${fmt(invested)}${resource ? ' ' + resource : ''}\n${list}`
           )
         )
         .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
@@ -1026,6 +1065,15 @@ export function renderLeaderboard(
       const invested = selectedEntry?.invested || 0;
       const produced = selectedEntry?.produced || 0;
       const roi = selectedEntry?.roi || 0;
+      const share = selectedEntry?.share || 0;
+      const score = selectedEntry?.score ?? (roi * share);
+      const resource = selectedEntry?.resource || (role4 === 'lumberjack' ? 'wood'
+        : role4 === 'smithy' ? 'steel'
+        : role4 === 'wheelwright' ? 'wheels'
+        : role4 === 'boilermaker' ? 'boilers'
+        : role4 === 'coachbuilder' ? 'cabins'
+        : role4 === 'mechanic' ? 'trains'
+        : undefined);
       let list = '';
       if (role4 === 'lumberjack') {
         list = `• Hand Axe: ${a4.lj1 || 0}\n• Crosscut Saw: ${a4.lj2 || 0}\n• Felling Wedge: ${a4.lj3 || 0}\n• Logging Crane: ${a4.lj4 || 0}\n• Tree Processor: ${a4.lj5 || 0}`;
@@ -1044,7 +1092,9 @@ export function renderLeaderboard(
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
             `## Inspect: <@${selectedUserId}> — ${role4 ? role4[0].toUpperCase() + role4.slice(1) : 'Unassigned'}\n`+
-            `Rate: ${rateFmt(rate)}/s\nROI: ${roiFmt(roi)} • Output: ${fmt(produced)} • Spend: ${fmt(invested)}\n${list}`
+            `Rate: ${rateFmt(rate)}/s\n`+
+            `Score: ${scoreFmt(score)} (ROI ${roiFmt(roi)} × Share ${(share * 100).toFixed(2)}%)\n`+
+            `Output: ${fmt(produced)}${resource ? ' ' + resource : ''} • Spend: ${fmt(invested)}${resource ? ' ' + resource : ''}\n${list}`
           )
         )
         .setButtonAccessory(new ButtonBuilder().setCustomId('top:noop:inspect').setStyle(ButtonStyle.Secondary).setDisabled(true).setLabel('Inspecting'));
@@ -1067,10 +1117,11 @@ export function renderLeaderboard(
     let youValue = options.viewerContributed || 0;
     let youTotal = totalContributions;
     let youLabel = '';
-    if (isEfficiencyTier && options.viewerRole) {
-      youValue = options.viewerRoi || 0;
-      youTotal = Math.max(1, maxRoi);
-      youLabel = 'ROI';
+    const viewerHasScore = usesScore && Object.prototype.hasOwnProperty.call(options, 'viewerScore');
+    if (viewerHasScore) {
+      youValue = options.viewerScore || 0;
+      youTotal = Math.max(1e-6, maxScore);
+      youLabel = 'Score';
     } else if (options.viewerRole) {
       youValue = options.viewerProduced || 0;
       youTotal = (options.roleTotals?.[options.viewerRole] ?? youTotal);
@@ -1084,15 +1135,39 @@ export function renderLeaderboard(
       else if (r === 'coachbuilder') youLabel = 'cabins';
       else if (r === 'mechanic') youLabel = 'trains';
     }
-    const bar = isEfficiencyTier && options.viewerRole
-      ? roiBar(youValue, Math.max(1e-6, maxRoi), 18)
+    const bar = viewerHasScore
+      ? scoreBar(youValue, Math.max(1e-6, maxScore), 18)
       : progressBar(youValue, Math.max(1, youTotal), 18);
-    let valueText = youLabel === 'ROI' ? `ROI ${roiFmt(youValue)}` : (youLabel ? `${fmt(youValue)} ${youLabel}` : `${fmt(youValue)}`);
-    if (isEfficiencyTier && options.viewerRole) {
+    let valueText: string;
+    if (youLabel === 'Score') valueText = `Score ${scoreFmt(youValue)}`;
+    else if (youLabel === 'ROI') valueText = `ROI ${roiFmt(youValue)}`;
+    else valueText = youLabel ? `${fmt(youValue)} ${youLabel}` : `${fmt(youValue)}`;
+
+    if (viewerHasScore) {
+      const produced = options.viewerProduced || 0;
+      const invested = options.viewerInvested || 0;
+      const roi = options.viewerRoi || 0;
+      const sharePct = (options.viewerShare || 0) * 100;
+      const unit = options.viewerResource
+        || (options.viewerRole === 'forger' ? 'pipes'
+          : options.viewerRole === 'welder' ? 'boxes'
+          : options.viewerRole === 'lumberjack' ? 'wood'
+          : options.viewerRole === 'smithy' ? 'steel'
+          : options.viewerRole === 'wheelwright' ? 'wheels'
+          : options.viewerRole === 'boilermaker' ? 'boilers'
+          : options.viewerRole === 'coachbuilder' ? 'cabins'
+          : options.viewerRole === 'mechanic' ? 'trains'
+          : tier === 1 ? 'sticks'
+          : tier === 2 ? 'beams'
+          : undefined);
+      valueText += ` • ROI ${roiFmt(roi)} × Share ${sharePct.toFixed(2)}%`;
+      valueText += ` • Output ${fmt(produced)}${unit ? ' ' + unit : ''} • Spend ${fmt(invested)}${unit ? ' ' + unit : ''}`;
+    } else if (youLabel === 'ROI') {
       const produced = options.viewerProduced || 0;
       const invested = options.viewerInvested || 0;
       valueText += ` • Output ${fmt(produced)} • Spend ${fmt(invested)}`;
     }
+
     listSections.push(
       new SectionBuilder()
         .addTextDisplayComponents(

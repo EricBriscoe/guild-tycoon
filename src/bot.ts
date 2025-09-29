@@ -1,12 +1,260 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
-import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getUsersByRoleT3, getUsersByRoleT4, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole, logPurchaseEvent, getPurchaseEvents } from './state.js';
+import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getUsersByRoleT3, getUsersByRoleT4, getAllT1UsersProduction, getAllT2UsersProduction, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole, logPurchaseEvent, getPurchaseEvents } from './state.js';
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 import 'chart.js/auto';
 import { renderTycoon, renderLeaderboard, renderRoleSwitchConfirm, renderRoleSwitchSelectorT4 } from './ui.js';
 import { applyPassiveTicks, clickChop, tryBuyAxeShared, tryBuyAutomation, applyGuildProgress, tryBuyPickShared, advanceTierIfReady, applyPassiveTicksT3, applyTier3GuildFlows, tryBuyAutomationT3, clickTier3, tryBuyT3ClickUpgrade, applyPassiveTicksT4, applyTier4GuildFlows, clickTier4, tryBuyAutomationT4, tryBuyT4ClickUpgrade, resetGuildForPrestige, T3_PIPE_PER_BOX, T4_STEEL_PER_WHEEL, T4_WOOD_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN } from './game.js';
 const DEBUG_TOP = (process.env.GT_DEBUG_TOP ?? '').toLowerCase() === 'true';
 const dTop = (...args: any[]) => { if (DEBUG_TOP) console.log('[top-debug]', ...args); };
+
+type TierRole = 'forger' | 'welder' | 'lumberjack' | 'smithy' | 'wheelwright' | 'boilermaker' | 'coachbuilder' | 'mechanic';
+
+type LeaderboardRow = {
+  userId: string;
+  contributed: number;
+  role?: TierRole;
+  produced?: number;
+  invested?: number;
+  roi?: number;
+  share?: number;
+  score?: number;
+  resource?: string;
+};
+
+type LeaderboardMetrics = {
+  top: LeaderboardRow[];
+  roleTotals?: Record<string, number>;
+  viewerRole: string | null;
+  viewerProduced: number;
+  viewerInvested: number;
+  viewerRoi: number;
+  viewerShare: number;
+  viewerScore: number;
+  viewerResource: string | null;
+};
+
+const dedupeByUserId = <T extends { userId: string }>(arr: T[]): T[] => {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of arr) {
+    const id = String(item.userId || '');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(item);
+  }
+  return out;
+};
+
+const inferResourceForRole = (tier: number, role: string | null | undefined): string | null => {
+  if (!role) {
+    if (tier === 1) return 'sticks';
+    if (tier === 2) return 'beams';
+    return null;
+  }
+  if (role === 'forger') return 'pipes';
+  if (role === 'welder') return 'boxes';
+  if (role === 'lumberjack') return 'wood';
+  if (role === 'smithy') return 'steel';
+  if (role === 'wheelwright') return 'wheels';
+  if (role === 'boilermaker') return 'boilers';
+  if (role === 'coachbuilder') return 'cabins';
+  if (role === 'mechanic') return 'trains';
+  return null;
+};
+
+async function buildLeaderboardMetrics(
+  guildId: string,
+  tier: number,
+  viewerId: string,
+  currentUser: any
+): Promise<LeaderboardMetrics> {
+  const base: LeaderboardMetrics = {
+    top: [],
+    roleTotals: undefined,
+    viewerRole: null,
+    viewerProduced: 0,
+    viewerInvested: 0,
+    viewerRoi: 0,
+    viewerShare: 0,
+    viewerScore: 0,
+    viewerResource: null
+  };
+
+  if (tier === 1) {
+    const rows = await getAllT1UsersProduction(guildId);
+    const enriched = rows.map(r => ({
+      userId: r.userId,
+      contributed: r.score || 0,
+      score: r.score || 0,
+      share: r.share || 0,
+      produced: r.produced || r.sticksProduced || 0,
+      invested: r.invested || 0,
+      roi: r.roi || 0,
+      resource: r.resource || 'sticks'
+    }));
+    enriched.sort((a, b) => {
+      const scoreDiff = (b.score || 0) - (a.score || 0);
+      if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+      return (b.produced || 0) - (a.produced || 0);
+    });
+    const top = dedupeByUserId(enriched);
+    const viewerRow = rows.find(r => r.userId === viewerId);
+    const viewerProduced = viewerRow?.produced || viewerRow?.sticksProduced || 0;
+    const viewerInvested = viewerRow?.invested || 0;
+    const viewerRoi = viewerRow?.roi || 0;
+    const viewerShare = viewerRow?.share || 0;
+    const viewerScore = viewerRow?.score ?? (viewerRoi * viewerShare);
+    return {
+      ...base,
+      top,
+      viewerProduced,
+      viewerInvested,
+      viewerRoi,
+      viewerShare,
+      viewerScore,
+      viewerResource: 'sticks'
+    };
+  }
+
+  if (tier === 2) {
+    const rows = await getAllT2UsersProduction(guildId);
+    const enriched = rows.map(r => ({
+      userId: r.userId,
+      contributed: r.score || 0,
+      score: r.score || 0,
+      share: r.share || 0,
+      produced: r.produced || r.beamsProduced || 0,
+      invested: r.invested || 0,
+      roi: r.roi || 0,
+      resource: r.resource || 'beams'
+    }));
+    enriched.sort((a, b) => {
+      const scoreDiff = (b.score || 0) - (a.score || 0);
+      if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+      return (b.produced || 0) - (a.produced || 0);
+    });
+    const top = dedupeByUserId(enriched);
+    const viewerRow = rows.find(r => r.userId === viewerId);
+    const viewerProduced = viewerRow?.produced || viewerRow?.beamsProduced || 0;
+    const viewerInvested = viewerRow?.invested || 0;
+    const viewerRoi = viewerRow?.roi || 0;
+    const viewerShare = viewerRow?.share || 0;
+    const viewerScore = viewerRow?.score ?? (viewerRoi * viewerShare);
+    return {
+      ...base,
+      top,
+      viewerProduced,
+      viewerInvested,
+      viewerRoi,
+      viewerShare,
+      viewerScore,
+      viewerResource: 'beams'
+    };
+  }
+
+  if (tier === 3) {
+    const rows = await getAllT3UsersProduction(guildId);
+    const enriched = rows
+      .map(r => ({
+        userId: r.userId,
+        role: (r.role || undefined) as TierRole | undefined,
+        produced: r.produced || 0,
+        contributed: r.score || 0,
+        score: r.score || 0,
+        share: r.share || 0,
+        invested: r.invested || 0,
+        roi: r.roi || 0,
+        resource: r.resource
+      }))
+      .filter(row => row.role && (row.produced || 0) > 0);
+    enriched.sort((a, b) => {
+      const scoreDiff = (b.score || 0) - (a.score || 0);
+      if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+      return (b.produced || 0) - (a.produced || 0);
+    });
+    const top = dedupeByUserId(enriched);
+    const viewerRow = rows.find(r => r.userId === viewerId && !!r.role);
+    const viewerRole = (viewerRow?.role || (currentUser as any)?.role3 || null) as string | null;
+    const viewerProduced = viewerRow?.produced || 0;
+    const viewerInvested = viewerRow?.invested || 0;
+    const viewerRoi = viewerRow?.roi || 0;
+    const viewerShare = viewerRow?.share || 0;
+    const viewerScore = viewerRow?.score ?? (viewerRoi * viewerShare);
+    const viewerResource = viewerRow?.resource || inferResourceForRole(tier, viewerRole);
+    const roleTotals: Record<string, number> = {};
+    rows.forEach(r => {
+      if (!r.role) return;
+      roleTotals[r.role] = (roleTotals[r.role] || 0) + (r.produced || 0);
+    });
+    return {
+      ...base,
+      top,
+      roleTotals,
+      viewerRole,
+      viewerProduced,
+      viewerInvested,
+      viewerRoi,
+      viewerShare,
+      viewerScore,
+      viewerResource: viewerResource || null
+    };
+  }
+
+  if (tier === 4) {
+    const rows = await getAllT4UsersProduction(guildId);
+    const enriched = rows
+      .map(r => ({
+        userId: r.userId,
+        role: (r.role || undefined) as TierRole | undefined,
+        produced: r.produced || 0,
+        contributed: r.score || 0,
+        score: r.score || 0,
+        share: r.share || 0,
+        invested: r.invested || 0,
+        roi: r.roi || 0,
+        resource: r.resource
+      }))
+      .filter(row => row.role && (row.produced || 0) > 0);
+    enriched.sort((a, b) => {
+      const scoreDiff = (b.score || 0) - (a.score || 0);
+      if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+      return (b.produced || 0) - (a.produced || 0);
+    });
+    const top = dedupeByUserId(enriched);
+    const viewerRow = rows.find(r => r.userId === viewerId && !!r.role);
+    const viewerRole = (viewerRow?.role || (currentUser as any)?.role4 || null) as string | null;
+    const viewerProduced = viewerRow?.produced || 0;
+    const viewerInvested = viewerRow?.invested || 0;
+    const viewerRoi = viewerRow?.roi || 0;
+    const viewerShare = viewerRow?.share || 0;
+    const viewerScore = viewerRow?.score ?? (viewerRoi * viewerShare);
+    const viewerResource = viewerRow?.resource || inferResourceForRole(tier, viewerRole);
+    const roleTotals: Record<string, number> = {};
+    rows.forEach(r => {
+      if (!r.role) return;
+      roleTotals[r.role] = (roleTotals[r.role] || 0) + (r.produced || 0);
+    });
+    return {
+      ...base,
+      top,
+      roleTotals,
+      viewerRole,
+      viewerProduced,
+      viewerInvested,
+      viewerRoi,
+      viewerShare,
+      viewerScore,
+      viewerResource: viewerResource || null
+    };
+  }
+
+  const fallback = await getTopContributorsByTier(guildId, tier, 5);
+  return {
+    ...base,
+    top: dedupeByUserId(fallback)
+  };
+}
 type DelayedChop =
   | { tier: 1 | 2; gained: number }
   | { tier: 3; t3: { role: 'forger' | 'welder' | null; pipes: number; boxesPotential: number } }
@@ -162,7 +410,6 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         // Ensure all users' passive gains and contributions are current
         await refreshGuildContributions(guildId);
         // Use per-tier contributions based on current guild tier
-        let view: any;
         let currentGuild: any;
         let tier: number = 1;
         let currentUser: any;
@@ -172,107 +419,28 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           currentUser = user;
           return null;
         });
-        
-        type LeaderboardRow = { userId: string; contributed: number; role?: any; produced?: number; invested?: number; roi?: number };
-        let top: LeaderboardRow[];
-        let roleTotals: Record<string, number> | undefined = undefined;
-        let viewerRole: string | null = null;
-        let viewerProduced = 0;
-        let viewerInvested = 0;
-        let viewerRoi = 0;
-        const dedupeByUserId = <T extends { userId: string }>(arr: T[]): T[] => {
-          const seen = new Set<string>();
-          const out: T[] = [];
-          for (const item of arr) {
-            const id = String(item.userId || '');
-            if (seen.has(id)) continue;
-            seen.add(id);
-            out.push(item);
-          }
-          return out;
-        };
-        if (tier === 3) {
-          const rows = await getAllT3UsersProduction(guildId);
-          const enriched = rows
-            .map(r => {
-              const role = (r.role || undefined) as any;
-              const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
-              const invested = r.invested || 0;
-              const roi = r.roi || 0;
-              return { userId: r.userId, contributed: produced, role, produced, invested, roi };
-            })
-            .filter(x => x.role && x.produced > 0);
-          enriched.sort((a, b) => {
-            const roiDiff = (b.roi || 0) - (a.roi || 0);
-            if (Math.abs(roiDiff) > 1e-9) return roiDiff;
-            return (b.produced || 0) - (a.produced || 0);
-          });
-          top = dedupeByUserId(enriched);
-          viewerRole = (currentUser as any)?.role3 || null;
-          if (viewerRole === 'forger') viewerProduced = (currentUser as any).pipesProduced || 0;
-          else if (viewerRole === 'welder') viewerProduced = (currentUser as any).boxesProduced || 0;
-          const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
-          if (viewerRow) {
-            viewerInvested = viewerRow.invested || 0;
-            viewerRoi = viewerRow.roi || 0;
-          }
-        } else {
-          if (tier === 4) {
-            const rows = await getAllT4UsersProduction(guildId);
-            const enriched = rows
-              .map(r => {
-                const role = (r.role || undefined) as any;
-                let produced = 0;
-                if (role === 'lumberjack') produced = r.woodProduced || 0;
-                else if (role === 'smithy') produced = r.steelProduced || 0;
-                else if (role === 'wheelwright') produced = r.wheelsProduced || 0;
-                else if (role === 'boilermaker') produced = r.boilersProduced || 0;
-                else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
-                else if (role === 'mechanic') produced = r.trainsProduced || 0;
-                const invested = r.invested || 0;
-                const roi = r.roi || 0;
-                return { userId: r.userId, contributed: produced, role, produced, invested, roi };
-              })
-              .filter(x => x.role && x.produced > 0);
-            enriched.sort((a, b) => {
-              const roiDiff = (b.roi || 0) - (a.roi || 0);
-              if (Math.abs(roiDiff) > 1e-9) return roiDiff;
-              return (b.produced || 0) - (a.produced || 0);
-            });
-            top = dedupeByUserId(enriched);
-            viewerRole = (currentUser as any)?.role4 || null;
-            if (viewerRole === 'lumberjack') viewerProduced = (currentUser as any).woodProduced || 0;
-            else if (viewerRole === 'smithy') viewerProduced = (currentUser as any).steelProduced || 0;
-            else if (viewerRole === 'wheelwright') viewerProduced = (currentUser as any).wheelsProduced || 0;
-            else if (viewerRole === 'boilermaker') viewerProduced = (currentUser as any).boilersProduced || 0;
-            else if (viewerRole === 'coachbuilder') viewerProduced = (currentUser as any).cabinsProduced || 0;
-            else if (viewerRole === 'mechanic') viewerProduced = (currentUser as any).trainsProduced || 0;
-            const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
-            if (viewerRow) {
-              viewerInvested = viewerRow.invested || 0;
-              viewerRoi = viewerRow.roi || 0;
-            }
-          } else {
-            top = dedupeByUserId(await getTopContributorsByTier(guildId, tier, 5));
-          }
-        }
-        
+        const metrics = await buildLeaderboardMetrics(guildId, tier, interaction.user.id, currentUser);
+        const { top, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, viewerShare, viewerScore, viewerResource } = metrics;
+
         let selectedUserId = top.length ? top[0].userId : undefined;
         let selectedUser: any = undefined;
         if (selectedUserId) {
           await withGuildAndUser(guildId, selectedUserId, (g2, u2) => { selectedUser = u2; return null; });
         }
         const viewer = await getUserRankByTier(guildId, tier, interaction.user.id);
-        dTop('slash /top', { tier, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, top });
-        view = renderLeaderboard(currentGuild, tier, top, selectedUserId, selectedUser, { 
-          viewerId: interaction.user.id, 
-          viewerRank: viewer.rank, 
+        dTop('slash /top', { tier, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, viewerShare, viewerScore, viewerResource, top });
+        const view = renderLeaderboard(currentGuild, tier, top, selectedUserId, selectedUser, {
+          viewerId: interaction.user.id,
+          viewerRank: viewer.rank,
           viewerContributed: viewer.contributed,
           roleTotals,
           viewerRole,
           viewerProduced,
           viewerInvested,
-          viewerRoi
+          viewerRoi,
+          viewerShare,
+          viewerScore,
+          viewerResource
         });
         await command.reply({
           ...(view || {}),
@@ -564,90 +732,11 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           return { guild, tier: guild.widgetTier || 1, selectedUser } as any;
         });
         const tier = (res as any).tier as number;
-        type ButtonLeaderboardRow = { userId: string; contributed: number; role?: any; produced?: number; invested?: number; roi?: number };
-        let top: ButtonLeaderboardRow[];
-        const dedupeByUserId = <T extends { userId: string }>(arr: T[]): T[] => {
-          const seen = new Set<string>();
-          const out: T[] = [];
-          for (const item of arr) {
-            const id = String(item.userId || '');
-            if (seen.has(id)) continue;
-            seen.add(id);
-            out.push(item);
-          }
-          return out;
-        };
-        let viewerRole: string | null = null;
-        let viewerProduced = 0;
-        let viewerInvested = 0;
-        let viewerRoi = 0;
-        let roleTotals: Record<string, number> | undefined = undefined;
-        if (tier === 3) {
-          const rows = await getAllT3UsersProduction(guildId);
-          const enriched = rows
-            .map(r => {
-              const role = (r.role || undefined) as any;
-              const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
-              const invested = r.invested || 0;
-              const roi = r.roi || 0;
-              return { userId: r.userId, contributed: produced, role, produced, invested, roi };
-            })
-            .filter(x => x.role && x.produced > 0);
-          enriched.sort((a, b) => {
-            const roiDiff = (b.roi || 0) - (a.roi || 0);
-            if (Math.abs(roiDiff) > 1e-9) return roiDiff;
-            return (b.produced || 0) - (a.produced || 0);
-          });
-          top = dedupeByUserId(enriched);
-          viewerRole = (currentUser as any)?.role3 || null;
-          if (viewerRole === 'forger') viewerProduced = (currentUser as any).pipesProduced || 0;
-          else if (viewerRole === 'welder') viewerProduced = (currentUser as any).boxesProduced || 0;
-          const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
-          if (viewerRow) {
-            viewerInvested = viewerRow.invested || 0;
-            viewerRoi = viewerRow.roi || 0;
-          }
-        } else if (tier === 4) {
-          const rows = await getAllT4UsersProduction(guildId);
-          const enriched = rows
-            .map(r => {
-              const role = (r.role || undefined) as any;
-              let produced = 0;
-              if (role === 'lumberjack') produced = r.woodProduced || 0;
-              else if (role === 'smithy') produced = r.steelProduced || 0;
-              else if (role === 'wheelwright') produced = r.wheelsProduced || 0;
-              else if (role === 'boilermaker') produced = r.boilersProduced || 0;
-              else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
-              else if (role === 'mechanic') produced = r.trainsProduced || 0;
-              const invested = r.invested || 0;
-              const roi = r.roi || 0;
-              return { userId: r.userId, contributed: produced, role, produced, invested, roi };
-            })
-            .filter(x => x.role && x.produced > 0);
-          enriched.sort((a, b) => {
-            const roiDiff = (b.roi || 0) - (a.roi || 0);
-            if (Math.abs(roiDiff) > 1e-9) return roiDiff;
-            return (b.produced || 0) - (a.produced || 0);
-          });
-          top = dedupeByUserId(enriched);
-          viewerRole = (currentUser as any)?.role4 || null;
-          if (viewerRole === 'lumberjack') viewerProduced = (currentUser as any).woodProduced || 0;
-          else if (viewerRole === 'smithy') viewerProduced = (currentUser as any).steelProduced || 0;
-          else if (viewerRole === 'wheelwright') viewerProduced = (currentUser as any).wheelsProduced || 0;
-          else if (viewerRole === 'boilermaker') viewerProduced = (currentUser as any).boilersProduced || 0;
-          else if (viewerRole === 'coachbuilder') viewerProduced = (currentUser as any).cabinsProduced || 0;
-          else if (viewerRole === 'mechanic') viewerProduced = (currentUser as any).trainsProduced || 0;
-          const viewerRow = rows.find(r => r.userId === interaction.user.id && ((r.role || null) === viewerRole));
-          if (viewerRow) {
-            viewerInvested = viewerRow.invested || 0;
-            viewerRoi = viewerRow.roi || 0;
-          }
-        } else {
-          top = dedupeByUserId(await getTopContributorsByTier(guildId, tier, 5));
-        }
+        const metrics = await buildLeaderboardMetrics(guildId, tier, interaction.user.id, currentUser);
+        const { top, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, viewerShare, viewerScore, viewerResource } = metrics;
 
         const viewer = await getUserRankByTier(guildId, tier, interaction.user.id);
-        dTop('button top:view', { tier, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, top });
+        dTop('button top:view', { tier, roleTotals, viewerRole, viewerProduced, viewerInvested, viewerRoi, viewerShare, viewerScore, viewerResource, top });
         view = renderLeaderboard((res as any).guild, tier, top, selectedUserId, selectedUserId ? (res as any).selectedUser : undefined, {
           viewerId: interaction.user.id,
           viewerRank: viewer.rank,
@@ -656,7 +745,10 @@ client.on('interactionCreate', async (interaction: Interaction) => {
           viewerRole,
           viewerProduced,
           viewerInvested,
-          viewerRoi
+          viewerRoi,
+          viewerShare,
+          viewerScore,
+          viewerResource
         });
         {
           const ok = await safeUpdate(buttonInteraction, view);

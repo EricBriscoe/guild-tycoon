@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { PoolClient } from 'pg';
 import { exec, qAll, qAllTx, qOne, qOneTx, qRun, qRunTx, transaction } from './db.js';
-import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX, T4_WOOD_PER_WHEEL, T4_STEEL_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN, AUTOMATION_T3_FORGE, AUTOMATION_T3_WELD, AUTOMATION_T4_LUMBERJACK, AUTOMATION_T4_SMITHY, AUTOMATION_T4_WHEEL, AUTOMATION_T4_BOILER, AUTOMATION_T4_COACH, AUTOMATION_T4_MECHANIC, AutomationType } from './game.js';
+import { Guild, User, applyPassiveTicks, applyGuildProgress, applyPassiveTicksT3, applyTier3GuildFlows, applyPassiveTicksT4, applyTier4GuildFlows, T3_PIPE_PER_BOX, T4_WOOD_PER_WHEEL, T4_STEEL_PER_WHEEL, T4_STEEL_PER_BOILER, T4_WOOD_PER_CABIN, T4_WHEELS_PER_TRAIN, T4_BOILERS_PER_TRAIN, T4_CABINS_PER_TRAIN, AUTOMATION, AUTOMATION_T2, AUTOMATION_T3_FORGE, AUTOMATION_T3_WELD, AUTOMATION_T4_LUMBERJACK, AUTOMATION_T4_SMITHY, AUTOMATION_T4_WHEEL, AUTOMATION_T4_BOILER, AUTOMATION_T4_COACH, AUTOMATION_T4_MECHANIC, AutomationType } from './game.js';
 import { TIER_GOALS, computeTierGoal } from './config.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -31,6 +31,12 @@ function sumAutomationCosts(pairs: Array<{ def: AutomationType; owned: number }>
     total += totalAutomationCost(def, owned);
   }
   return total;
+}
+
+function computeRoi(produced: number, automations: Array<{ def: AutomationType; owned: number }>): { produced: number; invested: number; roi: number } {
+  const invested = sumAutomationCosts(automations);
+  const roi = produced > 0 ? produced / (invested > 0 ? invested : 1) : 0;
+  return { produced, invested, roi };
 }
 
 function ensureDataDir(): void {
@@ -646,13 +652,105 @@ export async function getTopProducersByRole(guildId: string, role: 'forger' | 'w
   return rows as any[];
 }
 
+export interface Tier1ProductionRow {
+  userId: string;
+  sticksProduced: number;
+  produced: number;
+  invested: number;
+  roi: number;
+  share: number;
+  score: number;
+  resource: 'sticks';
+}
+
+export interface Tier2ProductionRow {
+  userId: string;
+  beamsProduced: number;
+  produced: number;
+  invested: number;
+  roi: number;
+  share: number;
+  score: number;
+  resource: 'beams';
+}
+
+export async function getAllT1UsersProduction(guildId: string): Promise<Tier1ProductionRow[]> {
+  const rows = await qAll<any>(
+    `SELECT user_id AS "userId",
+            COALESCE(contributed_t1, 0) AS "sticksProduced",
+            COALESCE(lumberjacks, 0) AS lumberjacks,
+            COALESCE(foremen, 0) AS foremen,
+            COALESCE(logging_camps, 0) AS logging_camps,
+            COALESCE(sawmills, 0) AS sawmills,
+            COALESCE(arcane_grove, 0) AS arcane_grove
+      FROM tier1_users
+      WHERE guild_id = ?`,
+    guildId
+  );
+  const mapped = rows.map((r: any) => {
+    const produced = r.sticksProduced || 0;
+    const { invested, roi } = computeRoi(produced, [
+      { def: AUTOMATION.lumberjack, owned: r.lumberjacks || 0 },
+      { def: AUTOMATION.foreman, owned: r.foremen || 0 },
+      { def: AUTOMATION.loggingCamp, owned: r.logging_camps || 0 },
+      { def: AUTOMATION.sawmill, owned: r.sawmills || 0 },
+      { def: AUTOMATION.arcaneGrove, owned: r.arcane_grove || 0 },
+    ]);
+    return { userId: r.userId, sticksProduced: produced, produced, invested, roi, resource: 'sticks', share: 0, score: 0 } as Tier1ProductionRow;
+  });
+  const totalProduced = mapped.reduce((sum, r) => sum + r.produced, 0);
+  mapped.forEach(r => {
+    const share = totalProduced > 0 ? r.produced / totalProduced : 0;
+    r.share = share;
+    r.score = r.roi * share;
+  });
+  return mapped;
+}
+
+export async function getAllT2UsersProduction(guildId: string): Promise<Tier2ProductionRow[]> {
+  const rows = await qAll<any>(
+    `SELECT user_id AS "userId",
+            COALESCE(contributed_t2, 0) AS "beamsProduced",
+            COALESCE(miners, 0) AS miners,
+            COALESCE(smelters, 0) AS smelters,
+            COALESCE(foundries, 0) AS foundries,
+            COALESCE(beam_mills, 0) AS beam_mills,
+            COALESCE(arcane_forge, 0) AS arcane_forge
+      FROM tier2_users
+      WHERE guild_id = ?`,
+    guildId
+  );
+  const mapped = rows.map((r: any) => {
+    const produced = r.beamsProduced || 0;
+    const { invested, roi } = computeRoi(produced, [
+      { def: AUTOMATION_T2.miner, owned: r.miners || 0 },
+      { def: AUTOMATION_T2.smelter, owned: r.smelters || 0 },
+      { def: AUTOMATION_T2.foundry, owned: r.foundries || 0 },
+      { def: AUTOMATION_T2.beamMill, owned: r.beam_mills || 0 },
+      { def: AUTOMATION_T2.arcaneForge, owned: r.arcane_forge || 0 },
+    ]);
+    return { userId: r.userId, beamsProduced: produced, produced, invested, roi, resource: 'beams', share: 0, score: 0 } as Tier2ProductionRow;
+  });
+  const totalProduced = mapped.reduce((sum, r) => sum + r.produced, 0);
+  mapped.forEach(r => {
+    const share = totalProduced > 0 ? r.produced / totalProduced : 0;
+    r.share = share;
+    r.score = r.roi * share;
+  });
+  return mapped;
+}
+
 export interface Tier3ProductionRow {
   userId: string;
   role: 'forger' | 'welder' | null;
   pipesProduced: number;
   boxesProduced: number;
+  produced: number;
   invested: number;
   roi: number;
+  share: number;
+  score: number;
+  resource?: 'pipes' | 'boxes';
 }
 
 export async function getAllT3UsersProduction(guildId: string): Promise<Tier3ProductionRow[]> {
@@ -675,27 +773,41 @@ export async function getAllT3UsersProduction(guildId: string): Promise<Tier3Pro
        WHERE guild_id = ?`,
     guildId
   );
-  return rows.map((r: any) => {
+  const mapped = rows.map((r: any) => {
     const role = (r.role || null) as 'forger' | 'welder' | null;
     const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
-    const forgeInvestment = sumAutomationCosts([
-      { def: AUTOMATION_T3_FORGE.forge1, owned: r.f1 || 0 },
-      { def: AUTOMATION_T3_FORGE.forge2, owned: r.f2 || 0 },
-      { def: AUTOMATION_T3_FORGE.forge3, owned: r.f3 || 0 },
-      { def: AUTOMATION_T3_FORGE.forge4, owned: r.f4 || 0 },
-      { def: AUTOMATION_T3_FORGE.forge5, owned: r.f5 || 0 },
-    ]);
-    const weldInvestment = sumAutomationCosts([
-      { def: AUTOMATION_T3_WELD.weld1, owned: r.w1 || 0 },
-      { def: AUTOMATION_T3_WELD.weld2, owned: r.w2 || 0 },
-      { def: AUTOMATION_T3_WELD.weld3, owned: r.w3 || 0 },
-      { def: AUTOMATION_T3_WELD.weld4, owned: r.w4 || 0 },
-      { def: AUTOMATION_T3_WELD.weld5, owned: r.w5 || 0 },
-    ]);
-    const invested = role === 'forger' ? forgeInvestment : role === 'welder' ? weldInvestment : 0;
-    const roi = produced > 0 ? produced / (invested > 0 ? invested : 1) : 0;
-    return { ...r, role, invested, roi } as Tier3ProductionRow;
+    const { invested, roi } = role === 'forger'
+      ? computeRoi(produced, [
+          { def: AUTOMATION_T3_FORGE.forge1, owned: r.f1 || 0 },
+          { def: AUTOMATION_T3_FORGE.forge2, owned: r.f2 || 0 },
+          { def: AUTOMATION_T3_FORGE.forge3, owned: r.f3 || 0 },
+          { def: AUTOMATION_T3_FORGE.forge4, owned: r.f4 || 0 },
+          { def: AUTOMATION_T3_FORGE.forge5, owned: r.f5 || 0 },
+        ])
+      : role === 'welder'
+        ? computeRoi(produced, [
+            { def: AUTOMATION_T3_WELD.weld1, owned: r.w1 || 0 },
+            { def: AUTOMATION_T3_WELD.weld2, owned: r.w2 || 0 },
+            { def: AUTOMATION_T3_WELD.weld3, owned: r.w3 || 0 },
+            { def: AUTOMATION_T3_WELD.weld4, owned: r.w4 || 0 },
+            { def: AUTOMATION_T3_WELD.weld5, owned: r.w5 || 0 },
+          ])
+        : { invested: 0, roi: 0 };
+    const resource = role === 'forger' ? 'pipes' : role === 'welder' ? 'boxes' : undefined;
+    return { ...r, role, produced, invested, roi, resource, share: 0, score: 0 } as Tier3ProductionRow;
   });
+  const totals: Record<'forger' | 'welder', number> = { forger: 0, welder: 0 };
+  mapped.forEach(r => {
+    if (r.role === 'forger') totals.forger += r.produced;
+    if (r.role === 'welder') totals.welder += r.produced;
+  });
+  mapped.forEach(r => {
+    const total = r.role ? totals[r.role] : 0;
+    const share = total > 0 ? r.produced / total : 0;
+    r.share = share;
+    r.score = r.roi * share;
+  });
+  return mapped;
 }
 
 export interface Tier4ProductionRow {
@@ -707,8 +819,12 @@ export interface Tier4ProductionRow {
   boilersProduced: number;
   cabinsProduced: number;
   trainsProduced: number;
+  produced: number;
   invested: number;
   roi: number;
+  share: number;
+  score: number;
+  resource?: 'wood' | 'steel' | 'wheels' | 'boilers' | 'cabins' | 'trains';
 }
 
 export async function getAllT4UsersProduction(guildId: string): Promise<Tier4ProductionRow[]> {
@@ -755,7 +871,7 @@ export async function getAllT4UsersProduction(guildId: string): Promise<Tier4Pro
        WHERE guild_id = ?`,
     guildId
   );
-  return rows.map((r: any) => {
+  const mapped = rows.map((r: any) => {
     const role = (r.role || null) as Tier4ProductionRow['role'];
     let produced = 0;
     if (role === 'lumberjack') produced = r.woodProduced || 0;
@@ -764,48 +880,64 @@ export async function getAllT4UsersProduction(guildId: string): Promise<Tier4Pro
     else if (role === 'boilermaker') produced = r.boilersProduced || 0;
     else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
     else if (role === 'mechanic') produced = r.trainsProduced || 0;
-
-    const invested = role === 'lumberjack' ? sumAutomationCosts([
+    const { invested, roi } = role === 'lumberjack' ? computeRoi(produced, [
       { def: AUTOMATION_T4_LUMBERJACK.lj1, owned: r.lj1 || 0 },
       { def: AUTOMATION_T4_LUMBERJACK.lj2, owned: r.lj2 || 0 },
       { def: AUTOMATION_T4_LUMBERJACK.lj3, owned: r.lj3 || 0 },
       { def: AUTOMATION_T4_LUMBERJACK.lj4, owned: r.lj4 || 0 },
       { def: AUTOMATION_T4_LUMBERJACK.lj5, owned: r.lj5 || 0 },
-    ]) : role === 'smithy' ? sumAutomationCosts([
+    ]) : role === 'smithy' ? computeRoi(produced, [
       { def: AUTOMATION_T4_SMITHY.sm1, owned: r.sm1 || 0 },
       { def: AUTOMATION_T4_SMITHY.sm2, owned: r.sm2 || 0 },
       { def: AUTOMATION_T4_SMITHY.sm3, owned: r.sm3 || 0 },
       { def: AUTOMATION_T4_SMITHY.sm4, owned: r.sm4 || 0 },
       { def: AUTOMATION_T4_SMITHY.sm5, owned: r.sm5 || 0 },
-    ]) : role === 'wheelwright' ? sumAutomationCosts([
+    ]) : role === 'wheelwright' ? computeRoi(produced, [
       { def: AUTOMATION_T4_WHEEL.wh1, owned: r.wh1 || 0 },
       { def: AUTOMATION_T4_WHEEL.wh2, owned: r.wh2 || 0 },
       { def: AUTOMATION_T4_WHEEL.wh3, owned: r.wh3 || 0 },
       { def: AUTOMATION_T4_WHEEL.wh4, owned: r.wh4 || 0 },
       { def: AUTOMATION_T4_WHEEL.wh5, owned: r.wh5 || 0 },
-    ]) : role === 'boilermaker' ? sumAutomationCosts([
+    ]) : role === 'boilermaker' ? computeRoi(produced, [
       { def: AUTOMATION_T4_BOILER.bl1, owned: r.bl1 || 0 },
       { def: AUTOMATION_T4_BOILER.bl2, owned: r.bl2 || 0 },
       { def: AUTOMATION_T4_BOILER.bl3, owned: r.bl3 || 0 },
       { def: AUTOMATION_T4_BOILER.bl4, owned: r.bl4 || 0 },
       { def: AUTOMATION_T4_BOILER.bl5, owned: r.bl5 || 0 },
-    ]) : role === 'coachbuilder' ? sumAutomationCosts([
+    ]) : role === 'coachbuilder' ? computeRoi(produced, [
       { def: AUTOMATION_T4_COACH.cb1, owned: r.cb1 || 0 },
       { def: AUTOMATION_T4_COACH.cb2, owned: r.cb2 || 0 },
       { def: AUTOMATION_T4_COACH.cb3, owned: r.cb3 || 0 },
       { def: AUTOMATION_T4_COACH.cb4, owned: r.cb4 || 0 },
       { def: AUTOMATION_T4_COACH.cb5, owned: r.cb5 || 0 },
-    ]) : role === 'mechanic' ? sumAutomationCosts([
+    ]) : role === 'mechanic' ? computeRoi(produced, [
       { def: AUTOMATION_T4_MECHANIC.ta1, owned: r.ta1 || 0 },
       { def: AUTOMATION_T4_MECHANIC.ta2, owned: r.ta2 || 0 },
       { def: AUTOMATION_T4_MECHANIC.ta3, owned: r.ta3 || 0 },
       { def: AUTOMATION_T4_MECHANIC.ta4, owned: r.ta4 || 0 },
       { def: AUTOMATION_T4_MECHANIC.ta5, owned: r.ta5 || 0 },
-    ]) : 0;
+    ]) : { invested: 0, roi: 0 };
+    const resource = role === 'lumberjack' ? 'wood'
+      : role === 'smithy' ? 'steel'
+      : role === 'wheelwright' ? 'wheels'
+      : role === 'boilermaker' ? 'boilers'
+      : role === 'coachbuilder' ? 'cabins'
+      : role === 'mechanic' ? 'trains'
+      : undefined;
 
-    const roi = produced > 0 ? produced / (invested > 0 ? invested : 1) : 0;
-    return { ...r, role, invested, roi } as Tier4ProductionRow;
+    return { ...r, role, produced, invested, roi, resource, share: 0, score: 0 } as Tier4ProductionRow;
   });
+  const totals: Record<string, number> = { lumberjack: 0, smithy: 0, wheelwright: 0, boilermaker: 0, coachbuilder: 0, mechanic: 0 };
+  mapped.forEach(r => {
+    if (r.role) totals[r.role] = (totals[r.role] || 0) + r.produced;
+  });
+  mapped.forEach(r => {
+    const total = r.role ? totals[r.role] || 0 : 0;
+    const share = total > 0 ? r.produced / total : 0;
+    r.share = share;
+    r.score = r.roi * share;
+  });
+  return mapped;
 }
 
 export async function getUsersByRoleT3(guildId: string, role: 'forger' | 'welder'): Promise<string[]> {
@@ -861,71 +993,48 @@ export async function getUserContributionByTier(guildId: string, tier: number, u
 }
 
 export async function getUserRankByTier(guildId: string, tier: number, userId: string): Promise<{ rank: number; contributed: number }> {
-  if (tier === 3) {
-    const rows = await getAllT3UsersProduction(guildId);
-    const filtered = rows
-      .map(r => {
-        const role = r.role || null;
-        const produced = role === 'forger' ? (r.pipesProduced || 0) : role === 'welder' ? (r.boxesProduced || 0) : 0;
-        return { ...r, role, produced };
-      })
-      .filter(r => r.role && r.produced > 0);
-    const userRow = filtered.find(r => r.userId === userId);
-    const userRoi = userRow ? (rtoi(userRow.roi) || 0) : 0;
-    const userProduced = userRow ? (userRow.produced || 0) : 0;
-    const higher = filtered.filter(r => {
-      const roi = rtoi(r.roi);
-      if (roi > userRoi + 1e-9) return true;
-      if (Math.abs(roi - userRoi) <= 1e-9) {
-        const produced = r.produced || 0;
-        return produced > userProduced + 1e-6;
+  const compareScore = <T extends { score: number; produced: number }>(rows: T[], userRow: T | undefined) => {
+    const userScore = rtoi(userRow?.score ?? 0);
+    const userProduced = userRow?.produced ?? 0;
+    const higher = rows.filter(r => {
+      const score = rtoi(r.score ?? 0);
+      if (score > userScore + 1e-9) return true;
+      if (Math.abs(score - userScore) <= 1e-9) {
+        return (r.produced || 0) > userProduced + 1e-6;
       }
       return false;
     }).length;
-    const rank = userRow ? higher + 1 : filtered.length + 1;
-    return { rank, contributed: userRoi };
-  }
-  if (tier === 4) {
-    const rows = await getAllT4UsersProduction(guildId);
-    const filtered = rows
-      .map(r => {
-        const role = r.role || null;
-        let produced = 0;
-        if (role === 'lumberjack') produced = r.woodProduced || 0;
-        else if (role === 'smithy') produced = r.steelProduced || 0;
-        else if (role === 'wheelwright') produced = r.wheelsProduced || 0;
-        else if (role === 'boilermaker') produced = r.boilersProduced || 0;
-        else if (role === 'coachbuilder') produced = r.cabinsProduced || 0;
-        else if (role === 'mechanic') produced = r.trainsProduced || 0;
-        return { ...r, role, produced };
-      })
-      .filter(r => r.role && r.produced > 0);
-    const userRow = filtered.find(r => r.userId === userId);
-    const userRoi = userRow ? (rtoi(userRow.roi) || 0) : 0;
-    const userProduced = userRow ? (userRow.produced || 0) : 0;
-    const higher = filtered.filter(r => {
-      const roi = rtoi(r.roi);
-      if (roi > userRoi + 1e-9) return true;
-      if (Math.abs(roi - userRoi) <= 1e-9) {
-        const produced = r.produced || 0;
-        return produced > userProduced + 1e-6;
-      }
-      return false;
-    }).length;
-    const rank = userRow ? higher + 1 : filtered.length + 1;
-    return { rank, contributed: userRoi };
+    const rank = userRow ? higher + 1 : rows.length + 1;
+    return { rank, contributed: userScore };
+  };
+
+  if (tier === 1) {
+    const rows = await getAllT1UsersProduction(guildId);
+    const userRow = rows.find(r => r.userId === userId);
+    return compareScore(rows, userRow);
   }
 
-  const contrib = await getUserContributionByTier(guildId, tier, userId);
-  let rank = 1;
-  if (tier === 1) {
-    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier1_users WHERE guild_id = ? AND contributed_t1 > ?`, guildId, contrib);
-    rank = 1 + (row?.higher ?? 0);
-  } else if (tier === 2) {
-    const row: any = await qOne(`SELECT COUNT(1) AS higher FROM tier2_users WHERE guild_id = ? AND contributed_t2 > ?`, guildId, contrib);
-    rank = 1 + (row?.higher ?? 0);
+  if (tier === 2) {
+    const rows = await getAllT2UsersProduction(guildId);
+    const userRow = rows.find(r => r.userId === userId);
+    return compareScore(rows, userRow);
   }
-  return { rank, contributed: contrib };
+
+  if (tier === 3) {
+    const rows = await getAllT3UsersProduction(guildId);
+    const enriched = rows.map(r => ({ ...r, produced: r.produced || (r.role === 'forger' ? (r.pipesProduced || 0) : r.role === 'welder' ? (r.boxesProduced || 0) : 0) }));
+    const userRow = enriched.find(r => r.userId === userId);
+    return compareScore(enriched, userRow);
+  }
+
+  if (tier === 4) {
+    const rows = await getAllT4UsersProduction(guildId);
+    const enriched = rows.map(r => ({ ...r, produced: r.produced || 0 }));
+    const userRow = enriched.find(r => r.userId === userId);
+    return compareScore(enriched, userRow);
+  }
+
+  return { rank: 1, contributed: 0 };
 }
 
 function rtoi(n: number | null | undefined): number {
@@ -940,51 +1049,42 @@ export async function initState(): Promise<void> {
 export async function computeAndAwardMvp(guildId: string): Promise<string | null> {
   try {
     return await transaction(async client => {
-      type RoiSummary = { sum: number; count: number; totalProduced: number };
-      const roiByUser = new Map<string, RoiSummary>();
+      type ScoreSummary = { sum: number; count: number; totalProduced: number };
+      const scoreByUser = new Map<string, ScoreSummary>();
 
-      const addRoi = (userId: string, roi: number, produced: number) => {
+      const addScore = (userId: string, score: number, produced: number) => {
         if (!userId) return;
-        if (!(roi > 0 || produced > 0)) return;
-        const entry = roiByUser.get(userId) || { sum: 0, count: 0, totalProduced: 0 };
-        entry.sum += roi;
+        if (!(score > 0 || produced > 0)) return;
+        const entry = scoreByUser.get(userId) || { sum: 0, count: 0, totalProduced: 0 };
+        entry.sum += score;
         entry.count += 1;
         entry.totalProduced += produced;
-        roiByUser.set(userId, entry);
+        scoreByUser.set(userId, entry);
       };
+
+      const tier1 = await getAllT1UsersProduction(guildId);
+      for (const row of tier1) addScore(row.userId, row.score, row.produced || row.sticksProduced || 0);
+
+      const tier2 = await getAllT2UsersProduction(guildId);
+      for (const row of tier2) addScore(row.userId, row.score, row.produced || row.beamsProduced || 0);
 
       const tier3 = await getAllT3UsersProduction(guildId);
       for (const row of tier3) {
         if (!row.role) continue;
-        const produced = row.role === 'forger'
-          ? (row.pipesProduced || 0)
-          : row.role === 'welder'
-            ? (row.boxesProduced || 0)
-            : 0;
-        addRoi(row.userId, row.roi, produced);
+        addScore(row.userId, row.score, row.produced || 0);
       }
 
       const tier4 = await getAllT4UsersProduction(guildId);
       for (const row of tier4) {
         if (!row.role) continue;
-        addRoi(row.userId, row.roi, (() => {
-          switch (row.role) {
-            case 'lumberjack': return row.woodProduced || 0;
-            case 'smithy': return row.steelProduced || 0;
-            case 'wheelwright': return row.wheelsProduced || 0;
-            case 'boilermaker': return row.boilersProduced || 0;
-            case 'coachbuilder': return row.cabinsProduced || 0;
-            case 'mechanic': return row.trainsProduced || 0;
-            default: return 0;
-          }
-        })());
+        addScore(row.userId, row.score, row.produced || 0);
       }
 
       let bestId: string | null = null;
       let bestAvg = -1;
       let bestCount = 0;
       let bestProduced = 0;
-      for (const [userId, info] of roiByUser.entries()) {
+      for (const [userId, info] of scoreByUser.entries()) {
         if (info.count <= 0) continue;
         const avg = info.sum / info.count;
         if (avg > bestAvg + 1e-9) {
