@@ -25,9 +25,10 @@
   - `DISCORD_CLIENT_ID`: your application (bot) client ID
   - `DISCORD_GUILD_ID` (optional): a dev server ID for instant command registration
 - Install deps: `npm install`
-- Register commands:
-  - Dev server (recommended): set `DISCORD_GUILD_ID` then `npm run register` (immediate)
-  - Global: remove `DISCORD_GUILD_ID` then `npm run register` (up to 1 hour to appear)
+- Commands auto-register on startup:
+  - By default, the bot registers global commands every time it starts (`GT_REGISTER_ON_START=true`).
+  - Set `DISCORD_GUILD_ID` to also purge any legacy guild-scoped commands to avoid duplicates.
+  - You can still run `npm run register` to force a one-off registration.
 - Start the bot: `npm start`
 
 Background Ticker (optional)
@@ -45,10 +46,11 @@ Background Ticker (optional)
   - `docker compose up -d --build bot`
   - View logs: `docker compose logs -f bot`
   - Data persists in `./data` on the host.
-- Register commands (optional one-off):
-  - Dev/guild scoped: ensure `DISCORD_GUILD_ID` is set in `.env`.
-  - `docker compose --profile setup run --rm register`
-  - For global registration, omit `DISCORD_GUILD_ID` in `.env`.
+- Command registration:
+  - The bot registers commands automatically on startup. No separate step is required.
+  - To disable auto-registration, set `GT_REGISTER_ON_START=false` in `.env`.
+  - The `register` one-off service remains available if you want to run it manually:
+    `docker compose --profile setup run --rm register`.
 
 **How To Play**
 
