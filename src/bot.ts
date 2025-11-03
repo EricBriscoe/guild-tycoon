@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, InteractionType, Partials, MessageFlags, Interaction, ChatInputCommandInteraction, ButtonInteraction } from 'discord.js';
+import { registerGlobalCommands } from './commands.js';
 import { initState, withGuildAndUser, getTopContributors, getTopContributorsByTier, getTopContributorsByRole, getTopProducersByRole, refreshGuildContributions, initializeTier2ForGuild, getUserRankByTier, refreshAllGuilds, resetAllUsersForPrestige, computeAndAwardMvp, getUsersByRoleT3, getUsersByRoleT4, getAllT1UsersProduction, getAllT2UsersProduction, getAllT3UsersProduction, getAllT4UsersProduction, disableAllWeldersPassive, disableT4ConsumersByRole, logPurchaseEvent, getPurchaseEvents } from './state.js';
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 import 'chart.js/auto';
@@ -263,10 +264,30 @@ type DelayedChop =
 // (legacy delayed actions scheduler removed)
 
 const token = process.env.DISCORD_TOKEN;
+const clientIdEnv = process.env.DISCORD_CLIENT_ID;
+const guildIdEnv = process.env.DISCORD_GUILD_ID; // optional, used only to purge guild cmds
+const autoRegister = (process.env.GT_REGISTER_ON_START ?? 'true').toLowerCase() !== 'false';
 
 if (!token) {
   console.error('Missing DISCORD_TOKEN in environment. See .env.example');
   process.exit(1);
+}
+
+// Best-effort: auto-register commands on startup so hosting the bot is sufficient
+if (autoRegister) {
+  if (!clientIdEnv) {
+    console.warn('[commands] Skipping auto-registration: DISCORD_CLIENT_ID missing');
+  } else {
+    (async () => {
+      try {
+        console.log('[commands] Auto-registering global commands...');
+        const count = await registerGlobalCommands(token!, clientIdEnv!, guildIdEnv);
+        console.log(`[commands] Registered ${count} global command(s).`);
+      } catch (e) {
+        console.error('[commands] Auto-registration failed (continuing to start bot):', e);
+      }
+    })();
+  }
 }
 
 await initState();
